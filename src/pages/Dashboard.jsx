@@ -1,0 +1,52 @@
+import { useNavigate } from 'react-router-dom';
+import { currentUser, logout } from '../lib/pocketbase';
+
+export default function Dashboard() {
+  const navigate = useNavigate();
+  const user = currentUser();
+
+  function handleLogout() {
+    logout();
+    navigate('/login');
+  }
+
+  return (
+    <main className="app-shell">
+      <aside className="sidebar">
+        <div>
+          <p className="eyebrow">MARTCOM</p>
+          <h2>Soporte IT</h2>
+        </div>
+        <nav>
+          <a className="active">Dashboard</a>
+          <a>Crear ticket</a>
+          <a>Mis tickets</a>
+          {(user?.role === 'admin' || user?.role === 'supervisor') && <a>Panel de soporte</a>}
+        </nav>
+        <button className="secondary" onClick={handleLogout}>Cerrar sesión</button>
+      </aside>
+
+      <section className="content">
+        <header className="topbar">
+          <div>
+            <p className="muted">Bienvenido</p>
+            <h1>{user?.name || user?.email}</h1>
+          </div>
+          <span className="role-badge">{user?.role || 'empleado'}</span>
+        </header>
+
+        <div className="stats-grid">
+          <article className="card"><span>Nuevos</span><strong>0</strong></article>
+          <article className="card"><span>En proceso</span><strong>0</strong></article>
+          <article className="card"><span>Esperando</span><strong>0</strong></article>
+          <article className="card"><span>Resueltos hoy</span><strong>0</strong></article>
+        </div>
+
+        <article className="card empty-state">
+          <h2>Base lista</h2>
+          <p>La autenticación ya está preparada. El siguiente módulo será creación y consulta de tickets.</p>
+        </article>
+      </section>
+    </main>
+  );
+}
