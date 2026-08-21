@@ -14,7 +14,7 @@ export default function Login() {
     setError('');
     setLoading(true);
     try {
-      const auth = await pb.collection('users').authWithPassword(email, password);
+      const auth = await pb.collection('hd_users').authWithPassword(email, password);
       if (auth.record.active === false) {
         pb.authStore.clear();
         throw new Error('Usuario desactivado');
