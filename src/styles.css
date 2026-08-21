@@ -14,14 +14,14 @@ label { display: block; font-size: 14px; }
 .login-card { width: min(430px, 100%); display: grid; gap: 18px; }
 .eyebrow { margin: 0 0 5px; font-weight: 800; letter-spacing: .16em; font-size: 12px; }
 .muted { color: #98a6bf; margin: 4px 0; }
-.error { background: #3a1720; color: #ffb4bf; border-radius: 10px; padding: 10px 12px; }
+.error { background: #3a1720; color: #ffb4bf; border-radius: 10px; padding: 10px 12px; margin-bottom: 16px; }
 .app-shell { min-height: 100vh; display: grid; grid-template-columns: 240px 1fr; }
 .sidebar { padding: 24px 18px; border-right: 1px solid #202c42; display: flex; flex-direction: column; justify-content: space-between; }
 .sidebar nav { display: grid; gap: 8px; margin-top: 32px; }
 .sidebar a { padding: 11px 12px; border-radius: 10px; color: #aebbd0; cursor: pointer; }
 .sidebar a.active { background: #19233a; color: white; }
 .content { padding: 28px; }
-.topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 24px; }
 .topbar h1 { margin: 3px 0 0; }
 .role-badge { background: #1b2944; padding: 8px 11px; border-radius: 999px; text-transform: capitalize; }
 .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
@@ -36,4 +36,24 @@ label { display: block; font-size: 14px; }
 .ticket-meta { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 22px 0; padding: 14px; border-radius: 10px; background: #0e1628; color: #aebbd0; font-size: 13px; }
 .ticket-meta strong { color: #e8edf6; }
 .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
-@media (max-width: 800px) { .app-shell { grid-template-columns: 1fr; } .sidebar { display: none; } .content { padding: 18px; } .stats-grid { grid-template-columns: repeat(2, 1fr); } .form-grid { grid-template-columns: 1fr; } .form-wide { grid-column: auto; } }
+.ticket-toolbar { display: grid; grid-template-columns: minmax(260px, 1fr) 240px; gap: 12px; margin-bottom: 18px; }
+.ticket-toolbar input, .ticket-toolbar select { margin-top: 0; }
+.ticket-list { display: grid; gap: 12px; }
+.ticket-row { transition: border-color .15s ease, transform .15s ease; }
+.ticket-row:hover { border-color: #3a4b70; transform: translateY(-1px); }
+.ticket-heading { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ticket-folio { color: #9fb0ce; font-size: 13px; font-weight: 700; }
+.ticket-row h3 { margin: 10px 0 7px; font-size: 18px; }
+.ticket-description { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 900px; }
+.ticket-details { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 16px; font-size: 13px; color: #98a6bf; }
+.ticket-details strong { color: #e8edf6; text-transform: capitalize; }
+.status-badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 700; background: #1d2940; }
+.status-nuevo { background: #172d4c; color: #b9d7ff; }
+.status-en_proceso { background: #3a3017; color: #ffe5a0; }
+.status-esperando_usuario, .status-esperando_tercero { background: #352445; color: #e3c4ff; }
+.status-resuelto, .status-cerrado { background: #17372d; color: #b9f3dc; }
+.status-cancelado { background: #3a2025; color: #ffc1c8; }
+.priority-alta, .priority-critica { color: #ffb4bf !important; }
+.priority-media { color: #ffe0a3 !important; }
+.priority-baja { color: #b9d7ff !important; }
+@media (max-width: 800px) { .app-shell { grid-template-columns: 1fr; } .sidebar { display: none; } .content { padding: 18px; } .stats-grid { grid-template-columns: repeat(2, 1fr); } .form-grid, .ticket-toolbar { grid-template-columns: 1fr; } .form-wide { grid-column: auto; } .topbar { align-items: flex-start; flex-direction: column; } }
