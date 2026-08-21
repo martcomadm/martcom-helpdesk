@@ -18,8 +18,8 @@ export default function Dashboard() {
           <h2>Soporte IT</h2>
         </div>
         <nav>
-          <a className="active">Dashboard</a>
-          <a>Crear ticket</a>
+          <a className="active" onClick={() => navigate('/')}>Dashboard</a>
+          <a onClick={() => navigate('/tickets/new')}>Crear ticket</a>
           <a>Mis tickets</a>
           {(user?.role === 'admin' || user?.role === 'supervisor') && <a>Panel de soporte</a>}
         </nav>
@@ -44,7 +44,8 @@ export default function Dashboard() {
 
         <article className="card empty-state">
           <h2>Base lista</h2>
-          <p>La autenticación ya está preparada. El siguiente módulo será creación y consulta de tickets.</p>
+          <p>La autenticación ya está preparada. Ya puedes comenzar a registrar tickets.</p>
+          <button onClick={() => navigate('/tickets/new')}>Crear primer ticket</button>
         </article>
       </section>
     </main>
