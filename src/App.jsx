@@ -3,6 +3,7 @@ import { pb } from './lib/pocketbase';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import CreateTicket from './pages/CreateTicket';
+import MyTickets from './pages/MyTickets';
 
 function ProtectedRoute({ children }) {
   if (!pb.authStore.isValid) return <Navigate to="/login" replace />;
@@ -26,6 +27,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <CreateTicket />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/tickets/mine"
+        element={
+          <ProtectedRoute>
+            <MyTickets />
           </ProtectedRoute>
         }
       />
