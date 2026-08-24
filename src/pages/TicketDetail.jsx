@@ -12,9 +12,15 @@ const statusLabels = {
   cancelado: 'Cancelado',
 };
 
+const priorityLabels = { baja: 'Baja', media: 'Media', alta: 'Alta', critica: 'Crítica' };
+
 function formatDate(value) {
   if (!value) return '—';
   return new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+}
+
+function personName(record) {
+  return record?.name || record?.email || 'Usuario';
 }
 
 export default function TicketDetail() {
@@ -25,10 +31,16 @@ export default function TicketDetail() {
   const canManage = user?.role === 'admin' || user?.role === 'supervisor';
   const [ticket, setTicket] = useState(null);
   const [supportUsers, setSupportUsers] = useState([]);
+  const [activity, setActivity] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [messageMode, setMessageMode] = useState('message');
+  const [messageText, setMessageText] = useState('');
+  const [messageFiles, setMessageFiles] = useState([]);
+  const [composerKey, setComposerKey] = useState(0);
 
   const backPath = location.state?.from === '/support' ? '/support' : '/tickets/mine';
   const backLabel = backPath === '/support' ? 'Panel de soporte' : 'Mis tickets';
@@ -36,12 +48,22 @@ export default function TicketDetail() {
   async function loadTicket() {
     const record = await pb.collection('hd_tickets').getOne(id, { expand: 'category,requester,assigned_to' });
     setTicket(record);
+    return record;
+  }
+
+  async function loadActivity() {
+    const records = await pb.collection('hd_ticket_messages').getFullList({
+      filter: `ticket = "${id}"`,
+      sort: 'created',
+      expand: 'author',
+    });
+    setActivity(records);
   }
 
   useEffect(() => {
     async function loadData() {
       try {
-        await loadTicket();
+        await Promise.all([loadTicket(), loadActivity()]);
         if (canManage) {
           try {
             const records = await pb.collection('hd_users').getFullList({
@@ -75,15 +97,33 @@ export default function TicketDetail() {
     navigate('/login');
   }
 
-  async function patchTicket(data, message) {
+  function flashSuccess(message) {
+    setSuccess(message);
+    window.setTimeout(() => setSuccess(''), 2500);
+  }
+
+  async function createSystemEvent({ message, field = '', oldValue = '', newValue = '' }) {
+    await pb.collection('hd_ticket_messages').create({
+      ticket: id,
+      author: user.id,
+      type: 'system',
+      message,
+      field,
+      old_value: oldValue || '',
+      new_value: newValue || '',
+      internal: false,
+    });
+  }
+
+  async function patchTicket(data, message, events = []) {
     setSaving(true);
     setError('');
     setSuccess('');
     try {
       await pb.collection('hd_tickets').update(id, data);
-      await loadTicket();
-      setSuccess(message);
-      window.setTimeout(() => setSuccess(''), 2500);
+      for (const event of events) await createSystemEvent(event);
+      await Promise.all([loadTicket(), loadActivity()]);
+      flashSuccess(message);
     } catch (err) {
       console.error(err);
       setError(err?.response?.message || err?.message || 'No fue posible actualizar el ticket.');
@@ -93,24 +133,53 @@ export default function TicketDetail() {
   }
 
   async function takeTicket() {
+    const now = new Date().toISOString();
+    const oldStatus = ticket.status;
     const data = { assigned_to: user.id };
-    if (ticket.status === 'nuevo') data.status = 'en_proceso';
-    if (!ticket.first_response_at) data.first_response_at = new Date().toISOString();
-    await patchTicket(data, 'Ticket asignado correctamente.');
+    const events = [{
+      message: `${personName(user)} tomó el ticket.`,
+      field: 'assigned_to',
+      oldValue: ticket.assigned_to || '',
+      newValue: user.id,
+    }];
+    if (ticket.status === 'nuevo') {
+      data.status = 'en_proceso';
+      events.push({ message: 'Estado cambiado de Nuevo a En proceso.', field: 'status', oldValue: oldStatus, newValue: 'en_proceso' });
+    }
+    if (!ticket.first_response_at) data.first_response_at = now;
+    await patchTicket(data, 'Ticket asignado correctamente.', events);
   }
 
   async function changeAssignee(value) {
+    const oldId = ticket.assigned_to || '';
+    if (value === oldId) return;
+    const oldName = ticket.expand?.assigned_to ? personName(ticket.expand.assigned_to) : 'Sin asignar';
+    const newUser = supportUsers.find((item) => item.id === value);
+    const newName = value ? personName(newUser) : 'Sin asignar';
     const data = { assigned_to: value || '' };
     if (value && !ticket.first_response_at) data.first_response_at = new Date().toISOString();
-    await patchTicket(data, value ? 'Responsable actualizado.' : 'Ticket dejado sin responsable.');
+    await patchTicket(data, value ? 'Responsable actualizado.' : 'Ticket dejado sin responsable.', [{
+      message: `Responsable cambiado de ${oldName} a ${newName}.`,
+      field: 'assigned_to',
+      oldValue: oldId,
+      newValue: value || '',
+    }]);
   }
 
   async function changePriority(value) {
-    await patchTicket({ priority: value }, 'Prioridad actualizada.');
+    if (value === ticket.priority) return;
+    await patchTicket({ priority: value }, 'Prioridad actualizada.', [{
+      message: `Prioridad cambiada de ${priorityLabels[ticket.priority] || ticket.priority} a ${priorityLabels[value] || value}.`,
+      field: 'priority',
+      oldValue: ticket.priority,
+      newValue: value,
+    }]);
   }
 
   async function changeStatus(value) {
+    if (value === ticket.status) return;
     const now = new Date().toISOString();
+    const oldStatus = ticket.status;
     const data = { status: value };
     if (value === 'en_proceso' && !ticket.first_response_at) data.first_response_at = now;
     if (value === 'resuelto') {
@@ -122,7 +191,57 @@ export default function TicketDetail() {
       if (!ticket.resolved_at) data.resolved_at = now;
       data.closed_at = now;
     }
-    await patchTicket(data, `Estado cambiado a ${statusLabels[value] || value}.`);
+    await patchTicket(data, `Estado cambiado a ${statusLabels[value] || value}.`, [{
+      message: `Estado cambiado de ${statusLabels[oldStatus] || oldStatus} a ${statusLabels[value] || value}.`,
+      field: 'status',
+      oldValue: oldStatus,
+      newValue: value,
+    }]);
+  }
+
+  async function submitMessage(e) {
+    e.preventDefault();
+    const text = messageText.trim();
+    const files = Array.from(messageFiles).slice(0, 5);
+    if (!text && files.length === 0) {
+      setError('Escribe un mensaje o adjunta al menos un archivo.');
+      return;
+    }
+
+    setSending(true);
+    setError('');
+    setSuccess('');
+    try {
+      if (canManage && messageMode === 'message' && !ticket.first_response_at) {
+        const now = new Date().toISOString();
+        const update = { first_response_at: now };
+        if (ticket.status === 'nuevo') update.status = 'en_proceso';
+        await pb.collection('hd_tickets').update(id, update);
+        if (ticket.status === 'nuevo') {
+          await createSystemEvent({ message: 'Estado cambiado de Nuevo a En proceso.', field: 'status', oldValue: 'nuevo', newValue: 'en_proceso' });
+        }
+      }
+
+      const data = new FormData();
+      data.append('ticket', id);
+      data.append('author', user.id);
+      data.append('type', canManage ? messageMode : 'message');
+      data.append('message', text);
+      data.append('internal', canManage && messageMode === 'internal_note' ? 'true' : 'false');
+      files.forEach((file) => data.append('attachments', file));
+      await pb.collection('hd_ticket_messages').create(data);
+
+      setMessageText('');
+      setMessageFiles([]);
+      setComposerKey((value) => value + 1);
+      await Promise.all([loadActivity(), loadTicket()]);
+      flashSuccess(messageMode === 'internal_note' ? 'Nota interna guardada.' : 'Respuesta enviada.');
+    } catch (err) {
+      console.error(err);
+      setError(err?.response?.message || err?.message || 'No fue posible enviar la respuesta.');
+    } finally {
+      setSending(false);
+    }
   }
 
   if (loading) {
@@ -169,26 +288,9 @@ export default function TicketDetail() {
                   {!ticket.assigned_to && <button onClick={takeTicket} disabled={saving}>Tomar ticket</button>}
                 </div>
                 <div className="management-grid">
-                  <label>
-                    Responsable
-                    <select value={ticket.assigned_to || ''} onChange={(e) => changeAssignee(e.target.value)} disabled={saving}>
-                      <option value="">Sin asignar</option>
-                      {supportUsers.map((item) => <option key={item.id} value={item.id}>{item.name || item.email}</option>)}
-                      {ticket.assigned_to && !supportUsers.some((item) => item.id === ticket.assigned_to) && <option value={ticket.assigned_to}>{ticket.expand?.assigned_to?.name || ticket.expand?.assigned_to?.email || 'Responsable actual'}</option>}
-                    </select>
-                  </label>
-                  <label>
-                    Prioridad
-                    <select value={ticket.priority || 'media'} onChange={(e) => changePriority(e.target.value)} disabled={saving}>
-                      <option value="baja">Baja</option><option value="media">Media</option><option value="alta">Alta</option><option value="critica">Crítica</option>
-                    </select>
-                  </label>
-                  <label>
-                    Estado
-                    <select value={ticket.status} onChange={(e) => changeStatus(e.target.value)} disabled={saving}>
-                      <option value="nuevo">Nuevo</option><option value="en_proceso">En proceso</option><option value="esperando_usuario">Esperando usuario</option><option value="esperando_tercero">Esperando tercero</option><option value="resuelto">Resuelto</option><option value="cerrado">Cerrado</option><option value="cancelado">Cancelado</option>
-                    </select>
-                  </label>
+                  <label>Responsable<select value={ticket.assigned_to || ''} onChange={(e) => changeAssignee(e.target.value)} disabled={saving}><option value="">Sin asignar</option>{supportUsers.map((item) => <option key={item.id} value={item.id}>{personName(item)}</option>)}{ticket.assigned_to && !supportUsers.some((item) => item.id === ticket.assigned_to) && <option value={ticket.assigned_to}>{ticket.expand?.assigned_to?.name || ticket.expand?.assigned_to?.email || 'Responsable actual'}</option>}</select></label>
+                  <label>Prioridad<select value={ticket.priority || 'media'} onChange={(e) => changePriority(e.target.value)} disabled={saving}><option value="baja">Baja</option><option value="media">Media</option><option value="alta">Alta</option><option value="critica">Crítica</option></select></label>
+                  <label>Estado<select value={ticket.status} onChange={(e) => changeStatus(e.target.value)} disabled={saving}><option value="nuevo">Nuevo</option><option value="en_proceso">En proceso</option><option value="esperando_usuario">Esperando usuario</option><option value="esperando_tercero">Esperando tercero</option><option value="resuelto">Resuelto</option><option value="cerrado">Cerrado</option><option value="cancelado">Cancelado</option></select></label>
                 </div>
                 {saving && <p className="muted saving-note">Guardando cambios…</p>}
               </article>
@@ -213,9 +315,40 @@ export default function TicketDetail() {
 
                 <div className="detail-section">
                   <h3>Evidencias</h3>
-                  {ticket.attachments?.length ? (
-                    <div className="attachment-list">{ticket.attachments.map((file) => <a key={file} href={pb.files.getURL(ticket, file)} target="_blank" rel="noreferrer" className="attachment-link">📎 {file}</a>)}</div>
-                  ) : <p className="muted">No se adjuntaron evidencias a este ticket.</p>}
+                  {ticket.attachments?.length ? <div className="attachment-list">{ticket.attachments.map((file) => <a key={file} href={pb.files.getURL(ticket, file)} target="_blank" rel="noreferrer" className="attachment-link">📎 {file}</a>)}</div> : <p className="muted">No se adjuntaron evidencias a este ticket.</p>}
+                </div>
+
+                <div className="detail-section activity-section">
+                  <div className="activity-title"><div><p className="eyebrow">BITÁCORA</p><h3>Actividad del ticket</h3></div><span>{activity.length} registro{activity.length === 1 ? '' : 's'}</span></div>
+
+                  <div className="activity-list">
+                    {activity.length === 0 ? (
+                      <div className="activity-empty"><p>Aún no hay respuestas ni eventos registrados.</p></div>
+                    ) : activity.map((item) => {
+                      const author = item.expand?.author;
+                      const files = item.attachments || [];
+                      if (item.type === 'system') {
+                        return <div className="activity-system" key={item.id}><div className="system-dot">•</div><div><div className="activity-meta"><strong>Sistema</strong><span>{formatDate(item.created)}</span></div><p>{item.message || 'Actualización del ticket'}</p></div></div>;
+                      }
+                      const internal = item.type === 'internal_note' || item.internal;
+                      return (
+                        <article className={`activity-message ${internal ? 'activity-internal' : ''}`} key={item.id}>
+                          <div className="activity-meta"><div><strong>{personName(author)}</strong>{internal && <span className="internal-badge">Solo soporte</span>}</div><span>{formatDate(item.created)}</span></div>
+                          {item.message && <p>{item.message}</p>}
+                          {files.length > 0 && <div className="message-attachments">{files.map((file) => <a key={file} href={pb.files.getURL(item, file)} target="_blank" rel="noreferrer">📎 {file}</a>)}</div>}
+                        </article>
+                      );
+                    })}
+                  </div>
+
+                  <form className={`message-composer ${messageMode === 'internal_note' ? 'composer-internal' : ''}`} onSubmit={submitMessage}>
+                    {canManage && <div className="composer-tabs"><button type="button" className={messageMode === 'message' ? 'active' : ''} onClick={() => setMessageMode('message')}>Respuesta pública</button><button type="button" className={messageMode === 'internal_note' ? 'active internal-tab' : ''} onClick={() => setMessageMode('internal_note')}>Nota interna</button></div>}
+                    <label>{messageMode === 'internal_note' ? 'Nota interna para soporte' : 'Escribe una respuesta'}<textarea value={messageText} onChange={(e) => setMessageText(e.target.value)} rows="5" maxLength="5000" placeholder={messageMode === 'internal_note' ? 'Esta nota solo será visible para soporte…' : 'Escribe una actualización para el ticket…'} /></label>
+                    <div className="composer-bottom">
+                      <label className="file-picker">Adjuntar archivos<input key={composerKey} type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(e) => setMessageFiles(e.target.files)} /></label>
+                      <div className="composer-actions"><span className="muted">{messageFiles?.length ? `${messageFiles.length} archivo(s)` : 'Máximo 5 archivos'}</span><button disabled={sending}>{sending ? 'Enviando…' : messageMode === 'internal_note' ? 'Guardar nota' : 'Enviar respuesta'}</button></div>
+                    </div>
+                  </form>
                 </div>
               </article>
 
