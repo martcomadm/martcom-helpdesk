@@ -31,58 +31,78 @@ export function getSlaPolicy(priority = 'media') {
   return SLA_POLICY[priority] || SLA_POLICY.media;
 }
 
-function calculateTarget(created, targetHours, actualAt, now = new Date()) {
-  const targetAt = new Date(new Date(created).getTime() + hoursToMs(targetHours));
-  const endAt = actualAt ? new Date(actualAt) : now;
-  const elapsedMs = diffMs(created, endAt);
+function calculateTarget(created, targetHours, actualAt) {
+  const createdAt = new Date(created);
+  const targetAt = new Date(createdAt.getTime() + hoursToMs(targetHours));
   const targetMs = hoursToMs(targetHours);
-  const remainingMs = targetAt.getTime() - endAt.getTime();
-  const met = actualAt ? elapsedMs <= targetMs : null;
-  const breached = actualAt ? !met : remainingMs < 0;
-  const warning = !actualAt && !breached && remainingMs <= targetMs * 0.25;
+  const fixedActualAt = actualAt ? new Date(actualAt) : null;
+
+  const getEndAt = () => fixedActualAt || new Date();
+  const getElapsedMs = () => diffMs(createdAt, getEndAt());
+  const getRemainingMs = () => targetAt.getTime() - getEndAt().getTime();
+  const getMet = () => fixedActualAt ? getElapsedMs() <= targetMs : null;
+  const getBreached = () => fixedActualAt ? !getMet() : getRemainingMs() < 0;
+  const getWarning = () => !fixedActualAt && !getBreached() && getRemainingMs() <= targetMs * 0.25;
 
   return {
     targetAt,
     targetHours,
     actualAt: actualAt || null,
-    elapsedMs,
-    remainingMs,
-    met,
-    breached,
-    warning,
+    get elapsedMs() { return getElapsedMs(); },
+    get remainingMs() { return getRemainingMs(); },
+    get met() { return getMet(); },
+    get breached() { return getBreached(); },
+    get warning() { return getWarning(); },
   };
 }
 
-export function getTicketSla(ticket, now = new Date()) {
+export function getTicketSla(ticket) {
   if (!ticket?.created) return null;
   const policy = getSlaPolicy(ticket.priority);
-  const response = calculateTarget(ticket.created, policy.firstResponseHours, ticket.first_response_at, now);
+  const response = calculateTarget(ticket.created, policy.firstResponseHours, ticket.first_response_at);
   const resolutionActual = ticket.resolved_at || ticket.closed_at || null;
-  const resolution = calculateTarget(ticket.created, policy.resolutionHours, resolutionActual, now);
+  const resolution = calculateTarget(ticket.created, policy.resolutionHours, resolutionActual);
   const terminal = CLOSED_STATUSES.includes(ticket.status);
 
-  let overall = 'ok';
-  if (response.breached || (!terminal && resolution.breached) || (resolution.actualAt && resolution.breached)) overall = 'breached';
-  else if (response.warning || (!terminal && resolution.warning)) overall = 'warning';
-  else if (terminal && response.met !== false && resolution.met !== false) overall = 'met';
+  const getOverall = () => {
+    if (response.breached || (!terminal && resolution.breached) || (resolution.actualAt && resolution.breached)) return 'breached';
+    if (response.warning || (!terminal && resolution.warning)) return 'warning';
+    if (terminal && response.met !== false && resolution.met !== false) return 'met';
+    return 'ok';
+  };
 
-  return { policy, response, resolution, overall, terminal };
+  return {
+    policy,
+    response,
+    resolution,
+    terminal,
+    get overall() { return getOverall(); },
+  };
 }
 
-export function slaBadge(ticket, now = new Date()) {
-  const sla = getTicketSla(ticket, now);
+export function slaBadge(ticket) {
+  const sla = getTicketSla(ticket);
   if (!sla) return { label: '—', tone: 'neutral' };
 
-  if (sla.overall === 'breached') {
-    const activeTarget = !sla.response.actualAt && sla.response.breached ? sla.response : sla.resolution;
-    return { label: `Vencido ${formatDuration(Math.abs(activeTarget.remainingMs))}`, tone: 'breached' };
-  }
-  if (sla.overall === 'warning') {
-    const activeTarget = !sla.response.actualAt ? sla.response : sla.resolution;
-    return { label: `En riesgo ${formatDuration(activeTarget.remainingMs)}`, tone: 'warning' };
-  }
-  if (sla.overall === 'met') return { label: 'SLA cumplido', tone: 'met' };
-
-  const activeTarget = !sla.response.actualAt ? sla.response : sla.resolution;
-  return { label: `Dentro ${formatDuration(activeTarget.remainingMs)}`, tone: 'ok' };
+  return {
+    get tone() {
+      if (sla.overall === 'breached') return 'breached';
+      if (sla.overall === 'warning') return 'warning';
+      if (sla.overall === 'met') return 'met';
+      return 'ok';
+    },
+    get label() {
+      if (sla.overall === 'breached') {
+        const activeTarget = !sla.response.actualAt && sla.response.breached ? sla.response : sla.resolution;
+        return `Vencido ${formatDuration(Math.abs(activeTarget.remainingMs))}`;
+      }
+      if (sla.overall === 'warning') {
+        const activeTarget = !sla.response.actualAt ? sla.response : sla.resolution;
+        return `En riesgo ${formatDuration(activeTarget.remainingMs)}`;
+      }
+      if (sla.overall === 'met') return 'SLA cumplido';
+      const activeTarget = !sla.response.actualAt ? sla.response : sla.resolution;
+      return `Dentro ${formatDuration(activeTarget.remainingMs)}`;
+    },
+  };
 }
