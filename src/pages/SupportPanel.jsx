@@ -18,15 +18,20 @@ export default function SupportPanel() {
   const [priority, setPriority] = useState('todas');
   const [category, setCategory] = useState('todas');
   const [department, setDepartment] = useState('todos');
+  const [realtimeReady, setRealtimeReady] = useState(false);
+
+  async function loadTickets() {
+    const ticketRecords = await pb.collection('hd_tickets').getFullList({ sort: '-created', expand: 'category,requester,assigned_to' });
+    setTickets(ticketRecords);
+  }
 
   useEffect(() => {
     async function loadData() {
       try {
-        const [ticketRecords, categoryRecords] = await Promise.all([
-          pb.collection('hd_tickets').getFullList({ sort: '-created', expand: 'category,requester,assigned_to' }),
+        const [, categoryRecords] = await Promise.all([
+          loadTickets(),
           pb.collection('hd_categories').getFullList({ filter: 'active = true', sort: 'order,name' }),
         ]);
-        setTickets(ticketRecords);
         setCategories(categoryRecords);
         try {
           const userRecords = await pb.collection('hd_users').getFullList({ filter: 'active = true', sort: 'name,email' });
@@ -40,6 +45,30 @@ export default function SupportPanel() {
       } finally { setLoading(false); }
     }
     loadData();
+  }, []);
+
+  useEffect(() => {
+    let unsubscribeTickets;
+    let active = true;
+
+    async function connectRealtime() {
+      try {
+        unsubscribeTickets = await pb.collection('hd_tickets').subscribe('*', async () => {
+          if (!active) return;
+          try { await loadTickets(); } catch (err) { console.warn('Error actualizando panel en tiempo real:', err); }
+        });
+        if (active) setRealtimeReady(true);
+      } catch (err) {
+        console.warn('No fue posible iniciar Realtime en el panel:', err);
+        if (active) setRealtimeReady(false);
+      }
+    }
+
+    connectRealtime();
+    return () => {
+      active = false;
+      if (unsubscribeTickets) unsubscribeTickets();
+    };
   }, []);
 
   function requesterLabel(ticket) {
@@ -83,7 +112,7 @@ export default function SupportPanel() {
         <button className="secondary" onClick={handleLogout}>Cerrar sesión</button>
       </aside>
       <section className="content">
-        <header className="topbar"><div><p className="muted">Mesa de ayuda</p><h1>Panel de soporte</h1><p className="muted">Bandeja general de incidencias y solicitudes.</p></div><span className="role-badge">{user?.role}</span></header>
+        <header className="topbar"><div><p className="muted">Mesa de ayuda</p><h1>Panel de soporte</h1><p className="muted">Bandeja general de incidencias y solicitudes.</p></div><div className="topbar-badges"><span className={`live-badge ${realtimeReady ? 'online' : ''}`}>● {realtimeReady ? 'En vivo' : 'Conectando'}</span><span className="role-badge">{user?.role}</span></div></header>
         <div className="stats-grid support-stats"><article className="card"><span>Nuevos</span><strong>{stats.nuevos}</strong></article><article className="card"><span>En proceso</span><strong>{stats.proceso}</strong></article><article className="card"><span>Esperando</span><strong>{stats.esperando}</strong></article><article className="card"><span>Sin asignar</span><strong>{stats.sinAsignar}</strong></article></div>
         <div className="support-toolbar card">
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar folio, asunto, solicitante, categoría, área o equipo…" />
