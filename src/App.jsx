@@ -6,10 +6,11 @@ import CreateTicket from './pages/CreateTicket';
 import MyTickets from './pages/MyTickets';
 import TicketDetail from './pages/TicketDetail';
 import SupportPanel from './pages/SupportPanel';
+import NotificationBell from './components/NotificationBell';
 
 function ProtectedRoute({ children }) {
   if (!pb.authStore.isValid) return <Navigate to="/login" replace />;
-  return children;
+  return <><NotificationBell />{children}</>;
 }
 
 export default function App() {
