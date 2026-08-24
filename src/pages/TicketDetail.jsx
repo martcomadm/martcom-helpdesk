@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { currentUser, logout, pb } from '../lib/pocketbase';
+import {
+  createNotification,
+  markTicketNotificationsRead,
+  notifyRequester,
+  notifySupport,
+} from '../lib/notifications';
 
 const statusLabels = {
   nuevo: 'Nuevo',
@@ -60,6 +66,7 @@ export default function TicketDetail() {
     async function loadData() {
       try {
         await Promise.all([loadTicket(), loadActivity()]);
+        markTicketNotificationsRead(id).catch((err) => console.warn('No se pudieron marcar avisos del ticket:', err));
         if (canManage) {
           try {
             const records = await pb.collection('hd_users').getFullList({
@@ -162,6 +169,15 @@ export default function TicketDetail() {
     }
     if (!ticket.first_response_at) data.first_response_at = now;
     await patchTicket(data, 'Ticket asignado correctamente.', events);
+
+    try {
+      await notifyRequester({
+        ticket,
+        type: 'assignment',
+        title: `${personName(user)} está atendiendo tu ticket`,
+        message: ticket.folio,
+      });
+    } catch (err) { console.warn('No se pudo enviar notificación de asignación:', err); }
   }
 
   async function changeAssignee(value) {
@@ -175,14 +191,36 @@ export default function TicketDetail() {
     await patchTicket(data, value ? 'Responsable actualizado.' : 'Ticket dejado sin responsable.', [{
       message: `Responsable cambiado de ${oldName} a ${newName}.`, field: 'assigned_to', oldValue: oldId, newValue: value || '',
     }]);
+
+    if (value && value !== user.id) {
+      try {
+        await createNotification({
+          recipient: value,
+          ticket: id,
+          type: 'assignment',
+          title: `Ticket asignado: ${ticket.folio}`,
+          message: ticket.title,
+        });
+      } catch (err) { console.warn('No se pudo notificar al responsable:', err); }
+    }
   }
 
   async function changePriority(value) {
     if (value === ticket.priority) return;
+    const oldPriority = ticket.priority;
     await patchTicket({ priority: value }, 'Prioridad actualizada.', [{
-      message: `Prioridad cambiada de ${priorityLabels[ticket.priority] || ticket.priority} a ${priorityLabels[value] || value}.`,
-      field: 'priority', oldValue: ticket.priority, newValue: value,
+      message: `Prioridad cambiada de ${priorityLabels[oldPriority] || oldPriority} a ${priorityLabels[value] || value}.`,
+      field: 'priority', oldValue: oldPriority, newValue: value,
     }]);
+
+    try {
+      await notifyRequester({
+        ticket,
+        type: 'priority_change',
+        title: `Prioridad actualizada: ${ticket.folio}`,
+        message: `${priorityLabels[oldPriority] || oldPriority} → ${priorityLabels[value] || value}`,
+      });
+    } catch (err) { console.warn('No se pudo notificar cambio de prioridad:', err); }
   }
 
   async function changeStatus(value) {
@@ -197,6 +235,16 @@ export default function TicketDetail() {
       message: `Estado cambiado de ${statusLabels[oldStatus] || oldStatus} a ${statusLabels[value] || value}.`,
       field: 'status', oldValue: oldStatus, newValue: value,
     }]);
+
+    const type = value === 'resuelto' ? 'resolved' : value === 'cerrado' ? 'closed' : 'status_change';
+    try {
+      await notifyRequester({
+        ticket,
+        type,
+        title: `${statusLabels[value] || value}: ${ticket.folio}`,
+        message: `${statusLabels[oldStatus] || oldStatus} → ${statusLabels[value] || value}`,
+      });
+    } catch (err) { console.warn('No se pudo notificar cambio de estado:', err); }
   }
 
   async function submitMessage(e) {
@@ -223,6 +271,29 @@ export default function TicketDetail() {
       data.append('internal', canManage && messageMode === 'internal_note' ? 'true' : 'false');
       files.forEach((file) => data.append('attachments', file));
       await pb.collection('hd_ticket_messages').create(data);
+
+      if (!(canManage && messageMode === 'internal_note')) {
+        const preview = text || (files.length ? 'Adjuntó archivo(s) al ticket.' : 'Nueva actividad en el ticket.');
+        try {
+          if (canManage) {
+            await notifyRequester({
+              ticket,
+              type: 'new_message',
+              title: `Nueva respuesta de soporte: ${ticket.folio}`,
+              message: preview.slice(0, 180),
+            });
+          } else {
+            await notifySupport({
+              ticket,
+              type: 'new_message',
+              title: `${personName(user)} respondió: ${ticket.folio}`,
+              message: preview.slice(0, 180),
+            });
+          }
+        } catch (notificationError) {
+          console.warn('El mensaje se envió, pero falló su notificación:', notificationError);
+        }
+      }
 
       setMessageText(''); setMessageFiles([]); setComposerKey((v) => v + 1);
       await Promise.all([loadActivity(), loadTicket()]);
