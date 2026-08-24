@@ -21,7 +21,7 @@ export default function Dashboard() {
           <a className="active" onClick={() => navigate('/')}>Dashboard</a>
           <a onClick={() => navigate('/tickets/new')}>Crear ticket</a>
           <a onClick={() => navigate('/tickets/mine')}>Mis tickets</a>
-          {(user?.role === 'admin' || user?.role === 'supervisor') && <a>Panel de soporte</a>}
+          {(user?.role === 'admin' || user?.role === 'supervisor') && <a onClick={() => navigate('/support')}>Panel de soporte</a>}
         </nav>
         <button className="secondary" onClick={handleLogout}>Cerrar sesión</button>
       </aside>
