@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard';
 import CreateTicket from './pages/CreateTicket';
 import MyTickets from './pages/MyTickets';
 import TicketDetail from './pages/TicketDetail';
+import SupportPanel from './pages/SupportPanel';
 
 function ProtectedRoute({ children }) {
   if (!pb.authStore.isValid) return <Navigate to="/login" replace />;
@@ -19,6 +20,7 @@ export default function App() {
       <Route path="/tickets/new" element={<ProtectedRoute><CreateTicket /></ProtectedRoute>} />
       <Route path="/tickets/mine" element={<ProtectedRoute><MyTickets /></ProtectedRoute>} />
       <Route path="/tickets/:id" element={<ProtectedRoute><TicketDetail /></ProtectedRoute>} />
+      <Route path="/support" element={<ProtectedRoute><SupportPanel /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
