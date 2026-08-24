@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { currentUser, logout, pb } from '../lib/pocketbase';
+import { notifySupport } from '../lib/notifications';
 
 function makeFolio() {
   const now = new Date();
@@ -37,10 +38,7 @@ export default function CreateTicket() {
     loadCategories();
   }, []);
 
-  function handleLogout() {
-    logout();
-    navigate('/login');
-  }
+  function handleLogout() { logout(); navigate('/login'); }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -61,7 +59,17 @@ export default function CreateTicket() {
       if (equipment.trim()) data.append('equipment', equipment.trim());
       Array.from(attachments).slice(0, 5).forEach((file) => data.append('attachments', file));
 
-      await pb.collection('hd_tickets').create(data);
+      const ticket = await pb.collection('hd_tickets').create(data);
+      try {
+        await notifySupport({
+          ticket,
+          type: 'new_ticket',
+          title: `Nuevo ticket ${ticket.folio}`,
+          message: ticket.title,
+        });
+      } catch (notificationError) {
+        console.error('El ticket se creó, pero falló la notificación:', notificationError);
+      }
       navigate('/tickets/mine', { replace: true });
     } catch (err) {
       console.error(err);
@@ -75,21 +83,11 @@ export default function CreateTicket() {
     <main className="app-shell">
       <aside className="sidebar">
         <div><p className="eyebrow">MARTCOM</p><h2>Soporte IT</h2></div>
-        <nav>
-          <a onClick={() => navigate('/')}>Dashboard</a>
-          <a className="active">Crear ticket</a>
-          <a onClick={() => navigate('/tickets/mine')}>Mis tickets</a>
-          {(user?.role === 'admin' || user?.role === 'supervisor') && <a onClick={() => navigate('/support')}>Panel de soporte</a>}
-        </nav>
+        <nav><a onClick={() => navigate('/')}>Dashboard</a><a className="active">Crear ticket</a><a onClick={() => navigate('/tickets/mine')}>Mis tickets</a>{(user?.role === 'admin' || user?.role === 'supervisor') && <a onClick={() => navigate('/support')}>Panel de soporte</a>}</nav>
         <button className="secondary" onClick={handleLogout}>Cerrar sesión</button>
       </aside>
-
       <section className="content">
-        <header className="topbar">
-          <div><p className="muted">Mesa de ayuda</p><h1>Crear ticket</h1><p className="muted">Describe el problema con el mayor detalle posible.</p></div>
-          <span className="role-badge">{user?.name || user?.email}</span>
-        </header>
-
+        <header className="topbar"><div><p className="muted">Mesa de ayuda</p><h1>Crear ticket</h1><p className="muted">Describe el problema con el mayor detalle posible.</p></div><span className="role-badge">{user?.name || user?.email}</span></header>
         <form className="card ticket-form" onSubmit={handleSubmit}>
           <div className="form-grid">
             <label className="form-wide">Asunto<input value={title} onChange={(e) => setTitle(e.target.value)} maxLength="200" placeholder="Ej. No puedo ingresar a Chatwoot" required /></label>
