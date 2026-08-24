@@ -11,6 +11,13 @@ function makeFolio() {
   return `TK-${year}-${stamp}-${random}`;
 }
 
+const priorityLabels = {
+  baja: 'Baja',
+  media: 'Media',
+  alta: 'Alta',
+  critica: 'Crítica',
+};
+
 export default function CreateTicket() {
   const navigate = useNavigate();
   const user = currentUser();
@@ -19,6 +26,7 @@ export default function CreateTicket() {
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('');
   const [equipment, setEquipment] = useState('');
+  const [priority, setPriority] = useState('media');
   const [attachments, setAttachments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadingCategories, setLoadingCategories] = useState(true);
@@ -54,7 +62,7 @@ export default function CreateTicket() {
       data.append('requester', user.id);
       data.append('department', user.department || 'Sin departamento');
       data.append('category', category);
-      data.append('priority', 'media');
+      data.append('priority', priority);
       data.append('status', 'nuevo');
       if (equipment.trim()) data.append('equipment', equipment.trim());
       Array.from(attachments).slice(0, 5).forEach((file) => data.append('attachments', file));
@@ -65,7 +73,7 @@ export default function CreateTicket() {
           ticket,
           type: 'new_ticket',
           title: `Nuevo ticket ${ticket.folio}`,
-          message: ticket.title,
+          message: `${ticket.title} · Prioridad ${priorityLabels[priority]}`,
         });
       } catch (notificationError) {
         console.error('El ticket se creó, pero falló la notificación:', notificationError);
@@ -92,11 +100,12 @@ export default function CreateTicket() {
           <div className="form-grid">
             <label className="form-wide">Asunto<input value={title} onChange={(e) => setTitle(e.target.value)} maxLength="200" placeholder="Ej. No puedo ingresar a Chatwoot" required /></label>
             <label>Categoría<select value={category} onChange={(e) => setCategory(e.target.value)} disabled={loadingCategories} required><option value="">{loadingCategories ? 'Cargando categorías…' : 'Selecciona una categoría'}</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            <label>Prioridad<select value={priority} onChange={(e) => setPriority(e.target.value)} required><option value="baja">Baja</option><option value="media">Media</option><option value="alta">Alta</option><option value="critica">Crítica</option></select><span className="field-help">Selecciona según el impacto y urgencia del problema.</span></label>
             <label>Equipo / estación (opcional)<input value={equipment} onChange={(e) => setEquipment(e.target.value)} placeholder="Ej. PC Ventas 08" /></label>
             <label className="form-wide">Descripción<textarea value={description} onChange={(e) => setDescription(e.target.value)} maxLength="5000" rows="8" placeholder="¿Qué estabas haciendo? ¿Qué error aparece? ¿Desde cuándo ocurre?" required /></label>
             <label className="form-wide">Evidencias (opcional, máximo 5 archivos)<input type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(e) => setAttachments(e.target.files)} /><span className="field-help">Puedes adjuntar capturas JPG, PNG, WEBP o PDF.</span></label>
           </div>
-          <div className="ticket-meta"><span>Solicitante: <strong>{user?.name || user?.email}</strong></span><span>Departamento: <strong>{user?.department || 'Sin departamento'}</strong></span><span>Prioridad inicial: <strong>Media</strong></span></div>
+          <div className="ticket-meta"><span>Solicitante: <strong>{user?.name || user?.email}</strong></span><span>Departamento: <strong>{user?.department || 'Sin departamento'}</strong></span><span>Prioridad inicial: <strong>{priorityLabels[priority]}</strong></span></div>
           {error && <div className="error">{error}</div>}
           <div className="form-actions"><button type="button" className="secondary" onClick={() => navigate('/')}>Cancelar</button><button type="submit" disabled={loading || loadingCategories}>{loading ? 'Creando ticket…' : 'Crear ticket'}</button></div>
         </form>
