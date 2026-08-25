@@ -50,20 +50,45 @@ function stateFor(created, hours, actualAt) {
   return 'ok';
 }
 
-async function getSupportRecipients(ticket) {
-  if (ticket.assigned_to) return [ticket.assigned_to];
+async function getLeadershipRecipients() {
   const params = new URLSearchParams({ page: '1', perPage: '200', filter: 'active = true && (role = "admin" || role = "supervisor")' });
   const data = await pb(`/api/collections/hd_users/records?${params}`);
   return data.items.map((u) => u.id);
 }
 
-async function notify(ticket, type, title, message) {
-  const recipients = await getSupportRecipients(ticket);
+async function getSupportRecipients(ticket) {
+  if (ticket.assigned_to) return [ticket.assigned_to];
+  return getLeadershipRecipients();
+}
+
+async function getEscalationRecipients(ticket) {
+  const leadership = await getLeadershipRecipients();
+  return [...new Set([ticket.assigned_to, ...leadership].filter(Boolean))];
+}
+
+async function notifyRecipients(ticket, recipients, type, title, message) {
   for (const recipient of recipients) {
     await pb('/api/collections/hd_notifications/records', {
       method: 'POST', body: JSON.stringify({ recipient, ticket: ticket.id, type, title, message, read: false }),
     });
   }
+}
+
+async function notify(ticket, type, title, message) {
+  const recipients = await getSupportRecipients(ticket);
+  await notifyRecipients(ticket, recipients, type, title, message);
+}
+
+async function escalate(ticket, label) {
+  const recipients = await getEscalationRecipients(ticket);
+  const ownerText = ticket.assigned_to ? 'El responsable y liderazgo de soporte han sido notificados.' : 'El ticket continúa sin responsable; liderazgo de soporte ha sido notificado.';
+  await notifyRecipients(
+    ticket,
+    recipients,
+    'sla_breached',
+    `ESCALAMIENTO SLA: ${ticket.folio}`,
+    `El objetivo de ${label} ha vencido. ${ownerText}`,
+  );
 }
 
 async function patchTicket(ticketId, data) {
@@ -79,10 +104,10 @@ async function processTarget(ticket, kind, state, flagWarning, flagBreached) {
     console.log(`[SLA] WARNING ${ticket.folio} ${label}`);
   }
   if (state === 'breached' && !ticket[flagBreached]) {
-    await notify(ticket, 'sla_breached', `SLA vencido: ${ticket.folio}`, `El objetivo de ${label} ha vencido.`);
+    await escalate(ticket, label);
     await patchTicket(ticket.id, { [flagBreached]: true });
     ticket[flagBreached] = true;
-    console.log(`[SLA] BREACHED ${ticket.folio} ${label}`);
+    console.log(`[SLA] ESCALATED ${ticket.folio} ${label}`);
   }
 }
 
