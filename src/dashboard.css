@@ -1,0 +1,48 @@
+.dashboard-header-actions { display:flex; align-items:center; gap:10px; }
+.dashboard-live { display:inline-flex; align-items:center; gap:6px; color:#98a6bf; font-size:12px; }
+.dashboard-live.online { color:#b9f3dc; }
+.dashboard-filters { display:flex; justify-content:space-between; align-items:center; gap:14px; margin-bottom:18px; padding:14px 16px; }
+.dashboard-filters > div { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.dashboard-filters button { padding:8px 12px; background:#18243b; color:#aebbd0; font-size:12px; }
+.dashboard-filters button.active { background:#e8edf6; color:#111827; }
+.dashboard-period { color:#8999b5; font-size:12px; }
+.dashboard-kpis { grid-template-columns:repeat(5,minmax(0,1fr)); }
+.dashboard-kpis .kpi-card { position:relative; overflow:hidden; }
+.dashboard-kpis .kpi-card span { color:#aebbd0; font-size:13px; }
+.dashboard-kpis .kpi-card strong { font-size:30px; }
+.dashboard-kpis .kpi-card small { color:#7889a8; font-size:11px; }
+.kpi-danger strong { color:#ffb4bf; }
+.kpi-success strong { color:#b9f3dc; }
+.dashboard-grid { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr); gap:18px; margin-bottom:18px; }
+.dashboard-card-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:18px; }
+.dashboard-card-head h2 { margin:3px 0 0; font-size:18px; }
+.dashboard-card-head span { color:#8999b5; font-size:11px; }
+.metric-list { display:grid; gap:14px; }
+.metric-row { display:grid; grid-template-columns:135px minmax(0,1fr) 55px; gap:12px; align-items:center; }
+.metric-label { color:#cbd5e7; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.metric-bar { height:9px; border-radius:999px; background:#0d1526; border:1px solid #22304a; overflow:hidden; }
+.metric-bar > span { display:block; height:100%; min-width:2px; background:#7890bd; border-radius:inherit; }
+.metric-value { text-align:right; font-size:12px; font-weight:800; color:#e8edf6; }
+.metric-empty { color:#8999b5; text-align:center; padding:30px 10px; font-size:13px; }
+.dashboard-performance { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.performance-box { background:#0e1628; border:1px solid #202e48; border-radius:12px; padding:15px; display:grid; gap:7px; }
+.performance-box span { color:#8999b5; font-size:11px; }
+.performance-box strong { font-size:21px; }
+.performance-box small { color:#7485a4; font-size:10px; }
+.dashboard-table-wrap { overflow-x:auto; padding:0; }
+.dashboard-table { width:100%; border-collapse:collapse; min-width:850px; }
+.dashboard-table th { text-align:left; color:#8999b5; font-size:11px; font-weight:500; padding:13px 15px; border-bottom:1px solid #263550; }
+.dashboard-table td { padding:14px 15px; border-bottom:1px solid #1e2b43; font-size:12px; vertical-align:middle; }
+.dashboard-table tr:last-child td { border-bottom:0; }
+.dashboard-table tbody tr { cursor:pointer; }
+.dashboard-table tbody tr:hover { background:#16213a; }
+.dashboard-table td strong { display:block; font-size:12px; }
+.dashboard-table .sub { display:block; color:#8999b5; margin-top:4px; max-width:320px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sla-mini { display:inline-flex; padding:4px 7px; border-radius:999px; font-size:10px; font-weight:800; }
+.sla-mini.breached { background:#4a2228; color:#ffb4bf; }
+.sla-mini.warning { background:#4a3b18; color:#ffe0a3; }
+.sla-mini.ok, .sla-mini.met { background:#18382d; color:#b9f3dc; }
+.dashboard-section-title { margin:0 0 12px; }
+.dashboard-note { color:#8999b5; font-size:11px; margin-top:12px; }
+@media (max-width:1200px) { .dashboard-kpis { grid-template-columns:repeat(3,minmax(0,1fr)); } .dashboard-grid { grid-template-columns:1fr; } }
+@media (max-width:760px) { .dashboard-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); } .dashboard-filters { align-items:flex-start; flex-direction:column; } .dashboard-performance { grid-template-columns:1fr; } .metric-row { grid-template-columns:105px minmax(0,1fr) 45px; } }
