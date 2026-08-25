@@ -2,7 +2,6 @@ const PB_URL = (process.env.PB_URL || '').replace(/\/$/, '');
 const PB_EMAIL = process.env.PB_SUPERUSER_EMAIL || '';
 const PB_PASSWORD = process.env.PB_SUPERUSER_PASSWORD || '';
 const INTERVAL_MS = Math.max(60000, Number(process.env.SLA_WATCH_INTERVAL_MS || 60000));
-const TEST_TICKET_ID = (process.env.SLA_TEST_TICKET_ID || '').trim();
 
 const POLICY = {
   critica: { firstResponseHours: 1, resolutionHours: 4 },
@@ -42,8 +41,7 @@ async function pb(path, options = {}, retry = true) {
 }
 
 function hoursMs(hours) { return hours * 3600000; }
-function stateFor(created, hours, actualAt, forceBreach = false) {
-  if (forceBreach && !actualAt) return 'breached';
+function stateFor(created, hours, actualAt) {
   if (actualAt) return 'done';
   const total = hoursMs(hours);
   const remaining = new Date(created).getTime() + total - Date.now();
@@ -81,16 +79,18 @@ async function notify(ticket, type, title, message) {
   await notifyRecipients(ticket, recipients, type, title, message);
 }
 
-async function escalate(ticket, label, isTest = false) {
+async function escalate(ticket, label) {
   const recipients = await getEscalationRecipients(ticket);
-  const ownerText = ticket.assigned_to ? 'El responsable y liderazgo de soporte han sido notificados.' : 'El ticket continúa sin responsable; liderazgo de soporte ha sido notificado.';
-  const testPrefix = isTest ? '[PRUEBA] ' : '';
+  const ownerText = ticket.assigned_to
+    ? 'El responsable y liderazgo de soporte han sido notificados.'
+    : 'El ticket continúa sin responsable; liderazgo de soporte ha sido notificado.';
+
   await notifyRecipients(
     ticket,
     recipients,
     'sla_breached',
-    `${testPrefix}ESCALAMIENTO SLA: ${ticket.folio}`,
-    `${testPrefix}El objetivo de ${label} ha vencido. ${ownerText}`,
+    `ESCALAMIENTO SLA: ${ticket.folio}`,
+    `El objetivo de ${label} ha vencido. ${ownerText}`,
   );
 }
 
@@ -98,7 +98,7 @@ async function patchTicket(ticketId, data) {
   await pb(`/api/collections/hd_tickets/records/${ticketId}`, { method: 'PATCH', body: JSON.stringify(data) });
 }
 
-async function processTarget(ticket, kind, state, flagWarning, flagBreached, isTest = false) {
+async function processTarget(ticket, kind, state, flagWarning, flagBreached) {
   const label = kind === 'response' ? 'primera respuesta' : 'resolución';
   if (state === 'warning' && !ticket[flagWarning]) {
     await notify(ticket, 'sla_warning', `SLA en riesgo: ${ticket.folio}`, `El objetivo de ${label} está próximo a vencer.`);
@@ -107,10 +107,10 @@ async function processTarget(ticket, kind, state, flagWarning, flagBreached, isT
     console.log(`[SLA] WARNING ${ticket.folio} ${label}`);
   }
   if (state === 'breached' && !ticket[flagBreached]) {
-    await escalate(ticket, label, isTest);
+    await escalate(ticket, label);
     await patchTicket(ticket.id, { [flagBreached]: true });
     ticket[flagBreached] = true;
-    console.log(`[SLA] ${isTest ? 'TEST ' : ''}ESCALATED ${ticket.folio} ${label}`);
+    console.log(`[SLA] ESCALATED ${ticket.folio} ${label}`);
   }
 }
 
@@ -120,11 +120,10 @@ async function run() {
   for (const ticket of data.items) {
     if (TERMINAL.has(ticket.status)) continue;
     const policy = POLICY[ticket.priority] || POLICY.media;
-    const isTest = Boolean(TEST_TICKET_ID && ticket.id === TEST_TICKET_ID);
-    const response = stateFor(ticket.created, policy.firstResponseHours, ticket.first_response_at, isTest);
-    const resolution = stateFor(ticket.created, policy.resolutionHours, ticket.resolved_at || ticket.closed_at, isTest);
-    await processTarget(ticket, 'response', response, 'sla_response_warning_sent', 'sla_response_breached_sent', isTest);
-    await processTarget(ticket, 'resolution', resolution, 'sla_resolution_warning_sent', 'sla_resolution_breached_sent', isTest);
+    const response = stateFor(ticket.created, policy.firstResponseHours, ticket.first_response_at);
+    const resolution = stateFor(ticket.created, policy.resolutionHours, ticket.resolved_at || ticket.closed_at);
+    await processTarget(ticket, 'response', response, 'sla_response_warning_sent', 'sla_response_breached_sent');
+    await processTarget(ticket, 'resolution', resolution, 'sla_resolution_warning_sent', 'sla_resolution_breached_sent');
   }
 }
 
@@ -135,6 +134,5 @@ async function cycle() {
 
 requireConfig();
 console.log(`[SLA] Watcher iniciado. Intervalo: ${INTERVAL_MS / 1000}s`);
-if (TEST_TICKET_ID) console.log(`[SLA] MODO PRUEBA activo solo para ticket id: ${TEST_TICKET_ID}`);
 await cycle();
 setInterval(cycle, INTERVAL_MS);
