@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import pb, { currentUser, logout } from '../lib/pocketbase';
-import NotificationCenter from '../components/NotificationCenter';
 import '../dashboard.css';
 
 const PERIODS = [
@@ -189,7 +188,6 @@ export default function Dashboard() {
       </aside>
 
       <section className="content">
-        <NotificationCenter />
         <header className="topbar">
           <div>
             <p className="muted">Mesa de ayuda · Métricas</p>
