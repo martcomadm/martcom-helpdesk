@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
-import { currentUser, pb } from './lib/pocketbase';
+import { pb } from './lib/pocketbase';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import CreateTicket from './pages/CreateTicket';
@@ -14,13 +14,6 @@ function ProtectedRoute({ children }) {
   return <><NotificationBell />{children}</>;
 }
 
-function HomeRoute() {
-  if (!pb.authStore.isValid) return <Navigate to="/login" replace />;
-  const user = currentUser();
-  if (user?.role === 'soporte') return <Navigate to="/support" replace />;
-  return <ProtectedRoute><Dashboard /></ProtectedRoute>;
-}
-
 function TicketDetailRoute() {
   return <ProtectedRoute><TicketDetail /><ReopenHistoryPanel /></ProtectedRoute>;
 }
@@ -29,7 +22,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route path="/" element={<HomeRoute />} />
+      <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
       <Route path="/tickets/new" element={<ProtectedRoute><CreateTicket /></ProtectedRoute>} />
       <Route path="/tickets/mine" element={<ProtectedRoute><MyTickets /></ProtectedRoute>} />
       <Route path="/tickets/:id" element={<TicketDetailRoute />} />
