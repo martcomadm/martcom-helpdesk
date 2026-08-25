@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { currentUser, logout, pb } from '../lib/pocketbase';
+import { canSupervise, canWorkTickets, roleLabel } from '../lib/roles';
 import { getTicketSla, slaBadge } from '../lib/sla';
 
 const statusLabels = { nuevo: 'Nuevo', en_proceso: 'En proceso', esperando_usuario: 'Esperando usuario', esperando_tercero: 'Esperando tercero', resuelto: 'Resuelto', cerrado: 'Cerrado', cancelado: 'Cancelado' };
@@ -10,6 +11,8 @@ function formatDate(value) { if (!value) return '—'; return new Intl.DateTimeF
 export default function SupportPanel() {
   const navigate = useNavigate();
   const user = currentUser();
+  const mayWork = canWorkTickets(user);
+  const maySupervise = canSupervise(user);
   const [tickets, setTickets] = useState([]);
   const [categories, setCategories] = useState([]);
   const [usersById, setUsersById] = useState({});
@@ -82,14 +85,13 @@ export default function SupportPanel() {
   const departments = useMemo(() => [...new Set(tickets.map((ticket) => ticket.department).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [tickets]);
 
   const workload = useMemo(() => {
-    const activeUsers = Object.values(usersById).filter((item) => item.role === 'admin' || item.role === 'supervisor' || item.role === 'soporte');
+    const activeUsers = Object.values(usersById).filter((item) => ['admin', 'supervisor', 'soporte'].includes(item.role));
     const rows = activeUsers.map((member) => {
       const assigned = tickets.filter((ticket) => ticket.assigned_to === member.id && OPEN_STATUSES.has(ticket.status));
       return {
         id: member.id,
         name: member.name || member.email,
         total: assigned.length,
-        nuevos: assigned.filter((ticket) => ticket.status === 'nuevo').length,
         proceso: assigned.filter((ticket) => ticket.status === 'en_proceso').length,
         esperando: assigned.filter((ticket) => ['esperando_usuario', 'esperando_tercero'].includes(ticket.status)).length,
         vencidos: assigned.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length,
@@ -121,16 +123,16 @@ export default function SupportPanel() {
   }), [tickets]);
 
   function handleLogout() { logout(); navigate('/login'); }
-  if (user?.role !== 'admin' && user?.role !== 'supervisor') return <Navigate to="/" replace />;
+  if (!mayWork) return <Navigate to="/" replace />;
 
   return (
     <main className="app-shell">
-      <aside className="sidebar"><div><p className="eyebrow">MARTCOM</p><h2>Soporte IT</h2></div><nav><a onClick={() => navigate('/')}>Dashboard</a><a onClick={() => navigate('/tickets/new')}>Crear ticket</a><a onClick={() => navigate('/tickets/mine')}>Mis tickets</a><a className="active">Panel de soporte</a></nav><button className="secondary" onClick={handleLogout}>Cerrar sesión</button></aside>
+      <aside className="sidebar"><div><p className="eyebrow">MARTCOM</p><h2>Soporte IT</h2></div><nav>{maySupervise && <a onClick={() => navigate('/')}>Dashboard</a>}<a onClick={() => navigate('/tickets/new')}>Crear ticket</a><a onClick={() => navigate('/tickets/mine')}>Mis tickets</a><a className="active">Panel de soporte</a></nav><button className="secondary" onClick={handleLogout}>Cerrar sesión</button></aside>
       <section className="content">
-        <header className="topbar"><div><p className="muted">Mesa de ayuda</p><h1>Panel de soporte</h1><p className="muted">Bandeja general de incidencias, solicitudes y cumplimiento de SLA.</p></div><div className="topbar-badges"><span className={`live-badge ${realtimeReady ? 'online' : ''}`}>● {realtimeReady ? 'En vivo' : 'Conectando'}</span><span className="role-badge">{user?.role}</span></div></header>
+        <header className="topbar"><div><p className="muted">Mesa de ayuda</p><h1>Panel de soporte</h1><p className="muted">Bandeja general de incidencias, solicitudes y cumplimiento de SLA.</p></div><div className="topbar-badges"><span className={`live-badge ${realtimeReady ? 'online' : ''}`}>● {realtimeReady ? 'En vivo' : 'Conectando'}</span><span className="role-badge">{roleLabel(user)}</span></div></header>
         <div className="stats-grid support-stats"><article className="card"><span>Nuevos</span><strong>{stats.nuevos}</strong></article><article className="card"><span>En proceso</span><strong>{stats.proceso}</strong></article><article className="card"><span>Esperando</span><strong>{stats.esperando}</strong></article><article className="card"><span>SLA vencido</span><strong className={stats.vencidos ? 'priority-critica' : ''}>{stats.vencidos}</strong></article></div>
 
-        <article className="card" style={{ marginBottom: 18 }}>
+        {maySupervise && <article className="card" style={{ marginBottom: 18 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 16 }}>
             <div><p className="eyebrow">CARGA OPERATIVA</p><h2 style={{ margin: '4px 0' }}>Carga por responsable</h2><p className="muted" style={{ margin: 0 }}>Tickets abiertos por integrante. Ordenado de menor a mayor carga para facilitar la asignación.</p></div>
             <button className="secondary" onClick={() => setAssigneeFilter('sin_asignar')}>Sin asignar: {workload.unassigned}{workload.unassignedBreached ? ` · ${workload.unassignedBreached} vencido${workload.unassignedBreached === 1 ? '' : 's'}` : ''}</button>
@@ -142,7 +144,9 @@ export default function SupportPanel() {
               <small style={{ display: 'block', marginTop: 10, color: '#7485a4' }}>{index === 0 ? 'Menor carga actual · ' : ''}{member.riesgo} en riesgo</small>
             </button>)}
           </div>}
-        </article>
+        </article>}
+
+        {!maySupervise && <article className="card" style={{ marginBottom: 18, padding: 14 }}><strong>Vista de agente</strong><p className="muted" style={{ margin: '6px 0 0' }}>Puedes tomar tickets sin asignar y trabajar los que estén asignados a ti. La reasignación, reapertura y carga global del equipo quedan reservadas a supervisión.</p></article>}
 
         <div className="support-toolbar card">
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar folio, asunto, solicitante, categoría, área o equipo…" />
@@ -151,7 +155,7 @@ export default function SupportPanel() {
           <select value={slaFilter} onChange={(e) => setSlaFilter(e.target.value)}><option value="todos">Todos los SLA</option><option value="vencidos">SLA vencido</option><option value="riesgo">SLA en riesgo</option><option value="cumplidos">SLA cumplido</option></select>
           <select value={category} onChange={(e) => setCategory(e.target.value)}><option value="todas">Todas las categorías</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
           <select value={department} onChange={(e) => setDepartment(e.target.value)}><option value="todos">Todos los departamentos</option>{departments.map((item) => <option key={item} value={item}>{item}</option>)}</select>
-          <select value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}><option value="todos">Todos los responsables</option><option value="sin_asignar">Sin asignar</option>{workload.rows.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select>
+          {maySupervise && <select value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}><option value="todos">Todos los responsables</option><option value="sin_asignar">Sin asignar</option>{workload.rows.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select>}
         </div>
         <div className="support-results-head"><span>{filteredTickets.length} ticket{filteredTickets.length === 1 ? '' : 's'}</span><button className="secondary" onClick={() => { setSearch(''); setStatus('todos'); setPriority('todas'); setCategory('todas'); setDepartment('todos'); setSlaFilter('todos'); setAssigneeFilter('todos'); }}>Limpiar filtros</button></div>
         {error && <div className="error">{error}</div>}
