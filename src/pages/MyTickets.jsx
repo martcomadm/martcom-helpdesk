@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { currentUser, logout, pb } from '../lib/pocketbase';
+import { canWorkTickets } from '../lib/roles';
 
 const statusLabels = { nuevo: 'Nuevo', en_proceso: 'En proceso', esperando_usuario: 'Esperando usuario', esperando_tercero: 'Esperando tercero', resuelto: 'Resuelto', cerrado: 'Cerrado', cancelado: 'Cancelado' };
 
@@ -12,6 +13,7 @@ function formatDate(value) {
 export default function MyTickets() {
   const navigate = useNavigate();
   const user = currentUser();
+  const mayWorkTickets = canWorkTickets(user);
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -51,7 +53,7 @@ export default function MyTickets() {
           <a onClick={() => navigate('/')}>Dashboard</a>
           <a onClick={() => navigate('/tickets/new')}>Crear ticket</a>
           <a className="active">Mis tickets</a>
-          {(user?.role === 'admin' || user?.role === 'supervisor') && <a onClick={() => navigate('/support')}>Panel de soporte</a>}
+          {mayWorkTickets && <a onClick={() => navigate('/support')}>Panel de soporte</a>}
         </nav>
         <button className="secondary" onClick={handleLogout}>Cerrar sesión</button>
       </aside>
