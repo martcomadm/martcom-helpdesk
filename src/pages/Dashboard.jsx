@@ -11,7 +11,7 @@ const PERIODS = [
 ];
 
 const PRIORITY_HOURS = {
-  baja: { response: 8, resolution: 72 },
+  baja: { response: 8, resolution: 48 },
   media: { response: 4, resolution: 24 },
   alta: { response: 2, resolution: 8 },
   critica: { response: 1, resolution: 4 },
@@ -79,7 +79,7 @@ export default function Dashboard() {
   async function loadTickets(silent = false) {
     if (!silent) setLoading(true);
     try {
-      const options = { sort: '-created', expand: 'requester,category,department,assigned_to' };
+      const options = { sort: '-created', expand: 'requester,category,assigned_to' };
       if (!canManage && user?.id) options.filter = `requester = "${user.id}"`;
       const records = await pb.collection('hd_tickets').getFullList(options);
       setTickets(records);
@@ -114,7 +114,7 @@ export default function Dashboard() {
     const now = Date.now();
     const openStatuses = new Set(['nuevo', 'en_proceso', 'esperando_usuario', 'esperando_tercero']);
     const open = filtered.filter((t) => openStatuses.has(t.status));
-    const resolved = filtered.filter((t) => t.resolved_at || t.status === 'resuelto' || t.status === 'cerrado');
+    const resolved = filtered.filter((t) => t.status === 'resuelto' || t.status === 'cerrado');
     const responseSamples = filtered.map((t) => hoursBetween(t.created, t.first_response_at)).filter((v) => v != null);
     const resolutionSamples = resolved.map((t) => hoursBetween(t.created, t.resolved_at || t.closed_at)).filter((v) => v != null);
     const avgResponse = responseSamples.length ? responseSamples.reduce((a, b) => a + b, 0) / responseSamples.length : null;
@@ -133,7 +133,7 @@ export default function Dashboard() {
       const resolutionHours = hoursBetween(t.created, t.resolved_at || t.closed_at);
       const ageHours = Math.max(0, (now - created) / 3600000);
       const responseBreached = t.first_response_at ? responseHours > sla.response : ageHours > sla.response;
-      const resolutionDone = !!(t.resolved_at || t.closed_at || t.status === 'resuelto' || t.status === 'cerrado');
+      const resolutionDone = t.status === 'resuelto' || t.status === 'cerrado';
       const resolutionBreached = resolutionDone ? (resolutionHours != null && resolutionHours > sla.resolution) : ageHours > sla.resolution;
       const responseEvaluable = !!t.first_response_at;
       const resolutionEvaluable = resolutionDone && resolutionHours != null;
@@ -153,7 +153,7 @@ export default function Dashboard() {
       avgResolution,
       compliance: evaluated ? (compliant / evaluated) * 100 : null,
       categories: groupBy(filtered, (t) => t.expand?.category?.name || t.category_name),
-      departments: groupBy(filtered, (t) => t.expand?.department?.name || t.department_name),
+      departments: groupBy(filtered, (t) => t.department),
       priorities: groupBy(filtered, (t) => t.priority ? t.priority.charAt(0).toUpperCase() + t.priority.slice(1) : ''),
       recent: [...filtered].sort((a, b) => (dateMs(b.created) || 0) - (dateMs(a.created) || 0)).slice(0, 8),
     };
@@ -164,7 +164,7 @@ export default function Dashboard() {
     const created = dateMs(ticket.created);
     if (created == null) return { label: 'Sin dato', cls: 'ok' };
     const age = (Date.now() - created) / 3600000;
-    const done = ticket.resolved_at || ticket.closed_at || ticket.status === 'resuelto' || ticket.status === 'cerrado';
+    const done = ticket.status === 'resuelto' || ticket.status === 'cerrado';
     const resolution = done ? hoursBetween(ticket.created, ticket.resolved_at || ticket.closed_at) : age;
     if (resolution > sla.resolution) return { label: 'Vencido', cls: 'breached' };
     if (!done && resolution >= sla.resolution * 0.8) return { label: 'En riesgo', cls: 'warning' };
@@ -245,7 +245,7 @@ export default function Dashboard() {
             <tbody>{metrics.recent.map((ticket) => {
               const sla = ticketSla(ticket);
               return <tr key={ticket.id} onClick={() => navigate(`/tickets/${ticket.id}`)}>
-                <td><strong>{ticket.folio || ticket.id}</strong><span className="sub">{ticket.subject}</span></td>
+                <td><strong>{ticket.folio || ticket.id}</strong><span className="sub">{ticket.title}</span></td>
                 <td><strong className={`priority-${ticket.priority}`}>{ticket.priority || '—'}</strong></td>
                 <td><span className={`status-badge status-${ticket.status}`}>{(ticket.status || '—').replaceAll('_', ' ')}</span></td>
                 <td><span className={`sla-mini ${sla.cls}`}>{sla.label}</span></td>
