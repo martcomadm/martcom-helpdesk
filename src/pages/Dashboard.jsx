@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import pb, { currentUser, logout } from '../lib/pocketbase';
+import { pb, currentUser, logout } from '../lib/pocketbase';
 import '../dashboard.css';
 
 const PERIODS = [
