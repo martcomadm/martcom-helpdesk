@@ -26,7 +26,7 @@ export async function notifySupport({ ticket, type, title, message = '', actor }
     recipients = [ticket.assigned_to];
   } else {
     const support = await pb.collection('hd_users').getFullList({
-      filter: 'active = true && (role = "admin" || role = "supervisor")',
+      filter: 'active = true && (role = "admin" || role = "supervisor" || role = "soporte")',
       sort: 'name,email',
     });
     recipients = support.map((item) => item.id).filter((id) => id !== actorId);
