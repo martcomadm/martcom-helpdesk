@@ -66,6 +66,7 @@ export default function Dashboard() {
   const user = currentUser();
   const canManage = user?.role === 'admin' || user?.role === 'supervisor';
   const [tickets, setTickets] = useState([]);
+  const [reopenEvents, setReopenEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [period, setPeriod] = useState('30');
@@ -94,13 +95,36 @@ export default function Dashboard() {
     }
   }
 
+  async function loadReopenEvents() {
+    try {
+      const records = await pb.collection('hd_ticket_messages').getFullList({
+        filter: 'field = "status" && old_value = "cerrado" && new_value = "en_proceso"',
+        sort: '-created',
+      });
+      setReopenEvents(records);
+    } catch (err) {
+      console.warn('No fue posible cargar métricas de reapertura:', err);
+    }
+  }
+
   useEffect(() => {
     loadTickets();
-    let unsubscribe;
+    loadReopenEvents();
+    let unsubscribeTickets;
+    let unsubscribeMessages;
     pb.collection('hd_tickets').subscribe('*', () => loadTickets(true))
-      .then((fn) => { unsubscribe = fn; setLive(true); })
+      .then((fn) => { unsubscribeTickets = fn; setLive(true); })
       .catch((err) => { console.error('Dashboard realtime:', err); setLive(false); });
-    return () => { if (unsubscribe) unsubscribe(); };
+    pb.collection('hd_ticket_messages').subscribe('*', (event) => {
+      const record = event.record;
+      if (record?.field === 'status' && record?.old_value === 'cerrado' && record?.new_value === 'en_proceso') loadReopenEvents();
+    })
+      .then((fn) => { unsubscribeMessages = fn; })
+      .catch((err) => console.warn('Realtime reaperturas:', err));
+    return () => {
+      if (unsubscribeTickets) unsubscribeTickets();
+      if (unsubscribeMessages) unsubscribeMessages();
+    };
   }, []);
 
   const filtered = useMemo(() => {
@@ -119,6 +143,10 @@ export default function Dashboard() {
     const resolutionSamples = resolved.map((t) => hoursBetween(t.created, t.resolved_at || t.closed_at)).filter((v) => v != null);
     const avgResponse = responseSamples.length ? responseSamples.reduce((a, b) => a + b, 0) / responseSamples.length : null;
     const avgResolution = resolutionSamples.length ? resolutionSamples.reduce((a, b) => a + b, 0) / resolutionSamples.length : null;
+    const filteredIds = new Set(filtered.map((t) => t.id));
+    const relevantReopens = reopenEvents.filter((event) => filteredIds.has(event.ticket));
+    const reopenedTickets = new Set(relevantReopens.map((event) => event.ticket)).size;
+    const totalReopens = relevantReopens.length;
 
     let evaluated = 0;
     let compliant = 0;
@@ -151,13 +179,15 @@ export default function Dashboard() {
       atRisk,
       avgResponse,
       avgResolution,
+      reopenedTickets,
+      totalReopens,
       compliance: evaluated ? (compliant / evaluated) * 100 : null,
       categories: groupBy(filtered, (t) => t.expand?.category?.name || t.category_name),
       departments: groupBy(filtered, (t) => t.department),
       priorities: groupBy(filtered, (t) => t.priority ? t.priority.charAt(0).toUpperCase() + t.priority.slice(1) : ''),
       recent: [...filtered].sort((a, b) => (dateMs(b.created) || 0) - (dateMs(a.created) || 0)).slice(0, 8),
     };
-  }, [filtered]);
+  }, [filtered, reopenEvents]);
 
   function ticketSla(ticket) {
     const sla = PRIORITY_HOURS[ticket.priority] || PRIORITY_HOURS.media;
@@ -215,6 +245,7 @@ export default function Dashboard() {
           <article className="card kpi-card kpi-success"><span>Resueltos</span><strong>{metrics.resolved}</strong><small>Resueltos o cerrados</small></article>
           <article className="card kpi-card kpi-danger"><span>SLA vencido</span><strong>{metrics.breachedOpen}</strong><small>{metrics.atRisk} actualmente en riesgo</small></article>
           <article className="card kpi-card"><span>Cumplimiento SLA</span><strong>{metrics.compliance == null ? '—' : `${metrics.compliance.toFixed(0)}%`}</strong><small>Objetivos ya evaluables</small></article>
+          <article className="card kpi-card"><span>Tickets reabiertos</span><strong>{metrics.reopenedTickets}</strong><small>{metrics.totalReopens} reapertura{metrics.totalReopens === 1 ? '' : 's'} registrada{metrics.totalReopens === 1 ? '' : 's'}</small></article>
         </div>
 
         <div className="dashboard-grid">
@@ -228,7 +259,7 @@ export default function Dashboard() {
               <div className="performance-box"><span>Primera respuesta promedio</span><strong>{formatHours(metrics.avgResponse)}</strong><small>Tickets con primera respuesta</small></div>
               <div className="performance-box"><span>Resolución promedio</span><strong>{formatHours(metrics.avgResolution)}</strong><small>Tickets resueltos</small></div>
               <div className="performance-box"><span>En riesgo</span><strong>{metrics.atRisk}</strong><small>≥ 80% del objetivo</small></div>
-              <div className="performance-box"><span>SLA vencidos abiertos</span><strong>{metrics.breachedOpen}</strong><small>Requieren atención</small></div>
+              <div className="performance-box"><span>Reaperturas</span><strong>{metrics.totalReopens}</strong><small>{metrics.reopenedTickets} ticket{metrics.reopenedTickets === 1 ? '' : 's'} afectado{metrics.reopenedTickets === 1 ? '' : 's'}</small></div>
             </div>
           </article>
         </div>
