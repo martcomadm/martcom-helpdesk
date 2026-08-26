@@ -6,7 +6,9 @@ import { getTicketSla, slaBadge } from '../lib/sla';
 
 const statusLabels = { nuevo: 'Nuevo', en_proceso: 'En proceso', esperando_usuario: 'Esperando usuario', esperando_tercero: 'Esperando tercero', resuelto: 'Resuelto', cerrado: 'Cerrado', cancelado: 'Cancelado' };
 const OPEN_STATUSES = new Set(['nuevo', 'en_proceso', 'esperando_usuario', 'esperando_tercero']);
+const STALE_HOURS = 24;
 function formatDate(value) { if (!value) return '—'; return new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)); }
+function ageHours(value) { const ms = value ? new Date(value).getTime() : NaN; return Number.isFinite(ms) ? Math.max(0, (Date.now() - ms) / 3600000) : 0; }
 
 export default function SupportPanel() {
   const navigate = useNavigate();
@@ -25,6 +27,7 @@ export default function SupportPanel() {
   const [department, setDepartment] = useState('todos');
   const [slaFilter, setSlaFilter] = useState('todos');
   const [assigneeFilter, setAssigneeFilter] = useState('todos');
+  const [alertFilter, setAlertFilter] = useState('todos');
   const [realtimeReady, setRealtimeReady] = useState(false);
   const [, setClock] = useState(Date.now());
 
@@ -88,19 +91,16 @@ export default function SupportPanel() {
     const activeUsers = Object.values(usersById).filter((item) => ['admin', 'supervisor', 'soporte'].includes(item.role));
     const rows = activeUsers.map((member) => {
       const assigned = tickets.filter((ticket) => ticket.assigned_to === member.id && OPEN_STATUSES.has(ticket.status));
-      return {
-        id: member.id,
-        name: member.name || member.email,
-        total: assigned.length,
-        proceso: assigned.filter((ticket) => ticket.status === 'en_proceso').length,
-        esperando: assigned.filter((ticket) => ['esperando_usuario', 'esperando_tercero'].includes(ticket.status)).length,
-        vencidos: assigned.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length,
-        riesgo: assigned.filter((ticket) => getTicketSla(ticket)?.overall === 'warning').length,
-      };
+      return { id: member.id, name: member.name || member.email, total: assigned.length, proceso: assigned.filter((ticket) => ticket.status === 'en_proceso').length, esperando: assigned.filter((ticket) => ['esperando_usuario', 'esperando_tercero'].includes(ticket.status)).length, vencidos: assigned.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length, riesgo: assigned.filter((ticket) => getTicketSla(ticket)?.overall === 'warning').length };
     }).sort((a, b) => a.total - b.total || a.name.localeCompare(b.name));
     const unassigned = tickets.filter((ticket) => !ticket.assigned_to && OPEN_STATUSES.has(ticket.status));
     return { rows, unassigned: unassigned.length, unassignedBreached: unassigned.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length };
   }, [tickets, usersById]);
+
+  const supervisorAlerts = useMemo(() => {
+    const open = tickets.filter((ticket) => OPEN_STATUSES.has(ticket.status));
+    return { unassigned: open.filter((ticket) => !ticket.assigned_to).length, breached: open.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length, risk: open.filter((ticket) => getTicketSla(ticket)?.overall === 'warning').length, waitingUser: open.filter((ticket) => ticket.status === 'esperando_usuario').length, stale: open.filter((ticket) => ageHours(ticket.updated || ticket.created) >= STALE_HOURS).length };
+  }, [tickets]);
 
   const filteredTickets = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -111,18 +111,15 @@ export default function SupportPanel() {
       const matchesSearch = !term || [ticket.folio, ticket.title, ticket.description, requester, categoryName, ticket.department, ticket.equipment].some((value) => String(value || '').toLowerCase().includes(term));
       const matchesSla = slaFilter === 'todos' || (slaFilter === 'vencidos' && sla?.overall === 'breached') || (slaFilter === 'riesgo' && sla?.overall === 'warning') || (slaFilter === 'cumplidos' && sla?.overall === 'met');
       const matchesAssignee = assigneeFilter === 'todos' || (assigneeFilter === 'sin_asignar' ? !ticket.assigned_to : ticket.assigned_to === assigneeFilter);
-      return matchesSearch && matchesSla && matchesAssignee && (status === 'todos' || ticket.status === status) && (priority === 'todas' || ticket.priority === priority) && (category === 'todas' || ticket.category === category) && (department === 'todos' || ticket.department === department);
+      const matchesAlert = alertFilter === 'todos' || (alertFilter === 'sin_asignar' && OPEN_STATUSES.has(ticket.status) && !ticket.assigned_to) || (alertFilter === 'vencidos' && OPEN_STATUSES.has(ticket.status) && sla?.overall === 'breached') || (alertFilter === 'riesgo' && OPEN_STATUSES.has(ticket.status) && sla?.overall === 'warning') || (alertFilter === 'esperando_usuario' && ticket.status === 'esperando_usuario') || (alertFilter === 'sin_movimiento' && OPEN_STATUSES.has(ticket.status) && ageHours(ticket.updated || ticket.created) >= STALE_HOURS);
+      return matchesSearch && matchesSla && matchesAssignee && matchesAlert && (status === 'todos' || ticket.status === status) && (priority === 'todas' || ticket.priority === priority) && (category === 'todas' || ticket.category === category) && (department === 'todos' || ticket.department === department);
     });
-  }, [tickets, usersById, search, status, priority, category, department, slaFilter, assigneeFilter]);
+  }, [tickets, usersById, search, status, priority, category, department, slaFilter, assigneeFilter, alertFilter]);
 
-  const stats = useMemo(() => ({
-    nuevos: tickets.filter((ticket) => ticket.status === 'nuevo').length,
-    proceso: tickets.filter((ticket) => ticket.status === 'en_proceso').length,
-    esperando: tickets.filter((ticket) => ['esperando_usuario', 'esperando_tercero'].includes(ticket.status)).length,
-    vencidos: tickets.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length,
-  }), [tickets]);
+  const stats = useMemo(() => ({ nuevos: tickets.filter((ticket) => ticket.status === 'nuevo').length, proceso: tickets.filter((ticket) => ticket.status === 'en_proceso').length, esperando: tickets.filter((ticket) => ['esperando_usuario', 'esperando_tercero'].includes(ticket.status)).length, vencidos: tickets.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length }), [tickets]);
 
   function handleLogout() { logout(); navigate('/login'); }
+  function applyAlert(value) { setAlertFilter(value); setStatus('todos'); setSlaFilter('todos'); setAssigneeFilter('todos'); }
   if (!mayWork) return <Navigate to="/" replace />;
 
   return (
@@ -132,39 +129,18 @@ export default function SupportPanel() {
         <header className="topbar"><div><p className="muted">Mesa de ayuda</p><h1>Panel de soporte</h1><p className="muted">Bandeja general de incidencias, solicitudes y cumplimiento de SLA.</p></div><div className="topbar-badges"><span className={`live-badge ${realtimeReady ? 'online' : ''}`}>● {realtimeReady ? 'En vivo' : 'Conectando'}</span><span className="role-badge">{roleLabel(user)}</span></div></header>
         <div className="stats-grid support-stats"><article className="card"><span>Nuevos</span><strong>{stats.nuevos}</strong></article><article className="card"><span>En proceso</span><strong>{stats.proceso}</strong></article><article className="card"><span>Esperando</span><strong>{stats.esperando}</strong></article><article className="card"><span>SLA vencido</span><strong className={stats.vencidos ? 'priority-critica' : ''}>{stats.vencidos}</strong></article></div>
 
-        {maySupervise && <article className="card" style={{ marginBottom: 18 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 16 }}>
-            <div><p className="eyebrow">CARGA OPERATIVA</p><h2 style={{ margin: '4px 0' }}>Carga por responsable</h2><p className="muted" style={{ margin: 0 }}>Tickets abiertos por integrante. Ordenado de menor a mayor carga para facilitar la asignación.</p></div>
-            <button className="secondary" onClick={() => setAssigneeFilter('sin_asignar')}>Sin asignar: {workload.unassigned}{workload.unassignedBreached ? ` · ${workload.unassignedBreached} vencido${workload.unassignedBreached === 1 ? '' : 's'}` : ''}</button>
-          </div>
-          {workload.rows.length === 0 ? <p className="muted">No hay responsables activos disponibles.</p> : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(230px,1fr))', gap: 12 }}>
-            {workload.rows.map((member, index) => <button key={member.id} onClick={() => setAssigneeFilter(member.id)} style={{ textAlign: 'left', background: '#0e1628', border: '1px solid #263550', borderRadius: 12, padding: 14, color: 'inherit', cursor: 'pointer' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center' }}><strong>{member.name}</strong><span className="sla-badge sla-ok">{member.total} abierto{member.total === 1 ? '' : 's'}</span></div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginTop: 12, fontSize: 11, color: '#9aa9c1' }}><span>Proceso <strong style={{ display: 'block', color: '#e8edf6', fontSize: 16 }}>{member.proceso}</strong></span><span>Espera <strong style={{ display: 'block', color: '#e8edf6', fontSize: 16 }}>{member.esperando}</strong></span><span>Vencidos <strong style={{ display: 'block', color: member.vencidos ? '#ffb4bf' : '#e8edf6', fontSize: 16 }}>{member.vencidos}</strong></span></div>
-              <small style={{ display: 'block', marginTop: 10, color: '#7485a4' }}>{index === 0 ? 'Menor carga actual · ' : ''}{member.riesgo} en riesgo</small>
-            </button>)}
-          </div>}
-        </article>}
+        {maySupervise && <article className="card" style={{ marginBottom: 18 }}><div style={{ marginBottom: 14 }}><p className="eyebrow">SUPERVISIÓN</p><h2 style={{ margin: '4px 0' }}>Alertas operativas</h2><p className="muted" style={{ margin: 0 }}>Casos que requieren atención del supervisor. Pulsa una tarjeta para filtrar la bandeja.</p></div><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 10 }}>
+          {[['sin_asignar','Sin asignar',supervisorAlerts.unassigned,'Abiertos sin responsable'],['vencidos','SLA vencido',supervisorAlerts.breached,'Requieren escalamiento'],['riesgo','En riesgo',supervisorAlerts.risk,'Próximos a vencer'],['esperando_usuario','Esperando usuario',supervisorAlerts.waitingUser,'Pendientes de respuesta'],['sin_movimiento','Sin movimiento >24 h',supervisorAlerts.stale,'Abiertos sin actualización']].map(([key,label,count,help]) => <button key={key} onClick={() => applyAlert(key)} style={{ textAlign:'left',padding:14,borderRadius:12,border:alertFilter===key?'1px solid #69a7ff':'1px solid #263550',background:'#0e1628',color:'inherit',cursor:'pointer' }}><span className="muted">{label}</span><strong className={key==='vencidos'&&count?'priority-critica':''} style={{display:'block',fontSize:26,marginTop:5}}>{count}</strong><small className="muted">{help}</small></button>)}
+        </div>{alertFilter !== 'todos' && <div style={{marginTop:12}}><button className="secondary" onClick={() => setAlertFilter('todos')}>Quitar alerta activa</button></div>}</article>}
+
+        {maySupervise && <article className="card" style={{ marginBottom: 18 }}><div style={{ display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:16,marginBottom:16 }}><div><p className="eyebrow">CARGA OPERATIVA</p><h2 style={{margin:'4px 0'}}>Carga por responsable</h2><p className="muted" style={{margin:0}}>Tickets abiertos por integrante. Ordenado de menor a mayor carga para facilitar la asignación.</p></div><button className="secondary" onClick={() => { setAlertFilter('todos'); setAssigneeFilter('sin_asignar'); }}>Sin asignar: {workload.unassigned}{workload.unassignedBreached ? ` · ${workload.unassignedBreached} vencido${workload.unassignedBreached === 1 ? '' : 's'}` : ''}</button></div>{workload.rows.length === 0 ? <p className="muted">No hay responsables activos disponibles.</p> : <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(230px,1fr))',gap:12}}>{workload.rows.map((member,index) => <button key={member.id} onClick={() => { setAlertFilter('todos'); setAssigneeFilter(member.id); }} style={{textAlign:'left',background:'#0e1628',border:'1px solid #263550',borderRadius:12,padding:14,color:'inherit',cursor:'pointer'}}><div style={{display:'flex',justifyContent:'space-between',gap:10,alignItems:'center'}}><strong>{member.name}</strong><span className="sla-badge sla-ok">{member.total} abierto{member.total===1?'':'s'}</span></div><div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginTop:12,fontSize:11,color:'#9aa9c1'}}><span>Proceso <strong style={{display:'block',color:'#e8edf6',fontSize:16}}>{member.proceso}</strong></span><span>Espera <strong style={{display:'block',color:'#e8edf6',fontSize:16}}>{member.esperando}</strong></span><span>Vencidos <strong style={{display:'block',color:member.vencidos?'#ffb4bf':'#e8edf6',fontSize:16}}>{member.vencidos}</strong></span></div><small style={{display:'block',marginTop:10,color:'#7485a4'}}>{index===0?'Menor carga actual · ':''}{member.riesgo} en riesgo</small></button>)}</div>}</article>}
 
         {!maySupervise && <article className="card" style={{ marginBottom: 18, padding: 14 }}><strong>Vista de agente</strong><p className="muted" style={{ margin: '6px 0 0' }}>Puedes tomar tickets sin asignar y trabajar los que estén asignados a ti. La reasignación, reapertura y carga global del equipo quedan reservadas a supervisión.</p></article>}
 
-        <div className="support-toolbar card">
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar folio, asunto, solicitante, categoría, área o equipo…" />
-          <select value={status} onChange={(e) => setStatus(e.target.value)}><option value="todos">Todos los estados</option><option value="nuevo">Nuevo</option><option value="en_proceso">En proceso</option><option value="esperando_usuario">Esperando usuario</option><option value="esperando_tercero">Esperando tercero</option><option value="resuelto">Resuelto</option><option value="cerrado">Cerrado</option><option value="cancelado">Cancelado</option></select>
-          <select value={priority} onChange={(e) => setPriority(e.target.value)}><option value="todas">Todas las prioridades</option><option value="critica">Crítica</option><option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option></select>
-          <select value={slaFilter} onChange={(e) => setSlaFilter(e.target.value)}><option value="todos">Todos los SLA</option><option value="vencidos">SLA vencido</option><option value="riesgo">SLA en riesgo</option><option value="cumplidos">SLA cumplido</option></select>
-          <select value={category} onChange={(e) => setCategory(e.target.value)}><option value="todas">Todas las categorías</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
-          <select value={department} onChange={(e) => setDepartment(e.target.value)}><option value="todos">Todos los departamentos</option>{departments.map((item) => <option key={item} value={item}>{item}</option>)}</select>
-          {maySupervise && <select value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}><option value="todos">Todos los responsables</option><option value="sin_asignar">Sin asignar</option>{workload.rows.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select>}
-        </div>
-        <div className="support-results-head"><span>{filteredTickets.length} ticket{filteredTickets.length === 1 ? '' : 's'}</span><button className="secondary" onClick={() => { setSearch(''); setStatus('todos'); setPriority('todas'); setCategory('todas'); setDepartment('todos'); setSlaFilter('todos'); setAssigneeFilter('todos'); }}>Limpiar filtros</button></div>
+        <div className="support-toolbar card"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar folio, asunto, solicitante, categoría, área o equipo…" /><select value={status} onChange={(e) => setStatus(e.target.value)}><option value="todos">Todos los estados</option>{Object.entries(statusLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select><select value={priority} onChange={(e) => setPriority(e.target.value)}><option value="todas">Todas las prioridades</option><option value="critica">Crítica</option><option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option></select><select value={slaFilter} onChange={(e) => setSlaFilter(e.target.value)}><option value="todos">Todos los SLA</option><option value="vencidos">SLA vencido</option><option value="riesgo">SLA en riesgo</option><option value="cumplidos">SLA cumplido</option></select><select value={category} onChange={(e) => setCategory(e.target.value)}><option value="todas">Todas las categorías</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><select value={department} onChange={(e) => setDepartment(e.target.value)}><option value="todos">Todos los departamentos</option>{departments.map((item) => <option key={item} value={item}>{item}</option>)}</select>{maySupervise && <select value={assigneeFilter} onChange={(e) => { setAlertFilter('todos'); setAssigneeFilter(e.target.value); }}><option value="todos">Todos los responsables</option><option value="sin_asignar">Sin asignar</option>{workload.rows.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select>}</div>
+        <div className="support-results-head"><span>{filteredTickets.length} ticket{filteredTickets.length === 1 ? '' : 's'}</span><button className="secondary" onClick={() => { setSearch(''); setStatus('todos'); setPriority('todas'); setCategory('todas'); setDepartment('todos'); setSlaFilter('todos'); setAssigneeFilter('todos'); setAlertFilter('todos'); }}>Limpiar filtros</button></div>
         {error && <div className="error">{error}</div>}
-        {loading ? <article className="card empty-state"><p>Cargando tickets…</p></article> : filteredTickets.length === 0 ? <article className="card empty-state"><h2>Sin resultados</h2><p>No hay tickets que coincidan con los filtros seleccionados.</p></article> : (
-          <div className="support-table-wrap card"><table className="support-table"><thead><tr><th>Ticket</th><th>Solicitante</th><th>Área</th><th>Categoría</th><th>Prioridad</th><th>Estado</th><th>SLA</th><th>Responsable</th><th>Creado</th></tr></thead><tbody>{filteredTickets.map((ticket) => { const sla = slaBadge(ticket); return (
-            <tr key={ticket.id} onClick={() => navigate(`/tickets/${ticket.id}`, { state: { from: '/support' } })}>
-              <td><strong>{ticket.folio}</strong><span className="table-subtext">{ticket.title}</span></td><td>{requesterLabel(ticket)}</td><td>{ticket.department || '—'}</td><td>{ticket.expand?.category?.name || '—'}</td><td><strong className={`priority-${ticket.priority}`}>{ticket.priority || '—'}</strong></td><td><span className={`status-badge status-${ticket.status}`}>{statusLabels[ticket.status] || ticket.status}</span></td><td><span className={`sla-badge sla-${sla.tone}`}>{sla.label}</span></td><td>{assigneeLabel(ticket)}</td><td>{formatDate(ticket.created)}</td>
-            </tr>); })}</tbody></table></div>
-        )}
+        {loading ? <article className="card empty-state"><p>Cargando tickets…</p></article> : filteredTickets.length === 0 ? <article className="card empty-state"><h2>Sin resultados</h2><p>No hay tickets que coincidan con los filtros seleccionados.</p></article> : <div className="support-table-wrap card"><table className="support-table"><thead><tr><th>Ticket</th><th>Solicitante</th><th>Área</th><th>Categoría</th><th>Prioridad</th><th>Estado</th><th>SLA</th><th>Responsable</th><th>Creado</th></tr></thead><tbody>{filteredTickets.map((ticket) => { const sla=slaBadge(ticket); return <tr key={ticket.id} onClick={() => navigate(`/tickets/${ticket.id}`, {state:{from:'/support'}})}><td><strong>{ticket.folio}</strong><span className="table-subtext">{ticket.title}</span></td><td>{requesterLabel(ticket)}</td><td>{ticket.department||'—'}</td><td>{ticket.expand?.category?.name||'—'}</td><td><strong className={`priority-${ticket.priority}`}>{ticket.priority||'—'}</strong></td><td><span className={`status-badge status-${ticket.status}`}>{statusLabels[ticket.status]||ticket.status}</span></td><td><span className={`sla-badge sla-${sla.tone}`}>{sla.label}</span></td><td>{assigneeLabel(ticket)}</td><td>{formatDate(ticket.created)}</td></tr>; })}</tbody></table></div>}
       </section>
     </main>
   );
