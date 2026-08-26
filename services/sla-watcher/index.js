@@ -2,6 +2,7 @@ const PB_URL = (process.env.PB_URL || '').replace(/\/$/, '');
 const PB_EMAIL = process.env.PB_SUPERUSER_EMAIL || '';
 const PB_PASSWORD = process.env.PB_SUPERUSER_PASSWORD || '';
 const INTERVAL_MS = Math.max(60000, Number(process.env.SLA_WATCH_INTERVAL_MS || 60000));
+const AUTO_CLOSE_HOURS = Math.max(1, Number(process.env.AUTO_CLOSE_RESOLVED_HOURS || 24));
 
 const POLICY = {
   critica: { firstResponseHours: 1, resolutionHours: 4 },
@@ -79,6 +80,11 @@ async function notify(ticket, type, title, message) {
   await notifyRecipients(ticket, recipients, type, title, message);
 }
 
+async function notifyRequester(ticket, type, title, message) {
+  if (!ticket.requester) return;
+  await notifyRecipients(ticket, [ticket.requester], type, title, message);
+}
+
 async function escalate(ticket, label) {
   const recipients = await getEscalationRecipients(ticket);
   const ownerText = ticket.assigned_to
@@ -98,6 +104,27 @@ async function patchTicket(ticketId, data) {
   await pb(`/api/collections/hd_tickets/records/${ticketId}`, { method: 'PATCH', body: JSON.stringify(data) });
 }
 
+async function createSystemEvent(ticket, message, oldStatus, newStatus) {
+  const author = ticket.assigned_to || ticket.requester;
+  if (!author) {
+    console.warn(`[AUTO-CLOSE] ${ticket.folio} sin autor disponible para bitácora.`);
+    return;
+  }
+  await pb('/api/collections/hd_ticket_messages/records', {
+    method: 'POST',
+    body: JSON.stringify({
+      ticket: ticket.id,
+      author,
+      type: 'system',
+      message,
+      field: 'status',
+      old_value: oldStatus,
+      new_value: newStatus,
+      internal: false,
+    }),
+  });
+}
+
 async function processTarget(ticket, kind, state, flagWarning, flagBreached) {
   const label = kind === 'response' ? 'primera respuesta' : 'resolución';
   if (state === 'warning' && !ticket[flagWarning]) {
@@ -114,7 +141,7 @@ async function processTarget(ticket, kind, state, flagWarning, flagBreached) {
   }
 }
 
-async function run() {
+async function processSla() {
   const params = new URLSearchParams({ page: '1', perPage: '500', filter: 'status != "resuelto" && status != "cerrado" && status != "cancelado"', sort: 'created' });
   const data = await pb(`/api/collections/hd_tickets/records?${params}`);
   for (const ticket of data.items) {
@@ -127,6 +154,39 @@ async function run() {
   }
 }
 
+async function processAutoClose() {
+  const params = new URLSearchParams({ page: '1', perPage: '500', filter: 'status = "resuelto" && resolved_at != ""', sort: 'resolved_at' });
+  const data = await pb(`/api/collections/hd_tickets/records?${params}`);
+  const thresholdMs = hoursMs(AUTO_CLOSE_HOURS);
+
+  for (const ticket of data.items) {
+    const resolvedAt = new Date(ticket.resolved_at).getTime();
+    if (!Number.isFinite(resolvedAt)) continue;
+    if (Date.now() - resolvedAt < thresholdMs) continue;
+
+    const closedAt = new Date().toISOString();
+    await patchTicket(ticket.id, { status: 'cerrado', closed_at: closedAt });
+    await createSystemEvent(
+      ticket,
+      `Sistema cerró automáticamente el ticket después de ${AUTO_CLOSE_HOURS} h en estado Resuelto sin reactivación. Se conserva el SLA histórico del ciclo original.`,
+      'resuelto',
+      'cerrado',
+    );
+    await notifyRequester(
+      ticket,
+      'closed',
+      `Ticket cerrado automáticamente: ${ticket.folio}`,
+      `La solicitud permaneció resuelta durante ${AUTO_CLOSE_HOURS} h y fue cerrada automáticamente.`,
+    );
+    console.log(`[AUTO-CLOSE] CLOSED ${ticket.folio} después de ${AUTO_CLOSE_HOURS}h resuelto`);
+  }
+}
+
+async function run() {
+  await processSla();
+  await processAutoClose();
+}
+
 async function cycle() {
   try { await run(); }
   catch (err) { console.error('[SLA] Error:', err); }
@@ -134,5 +194,6 @@ async function cycle() {
 
 requireConfig();
 console.log(`[SLA] Watcher iniciado. Intervalo: ${INTERVAL_MS / 1000}s`);
+console.log(`[AUTO-CLOSE] Tickets resueltos se cerrarán después de ${AUTO_CLOSE_HOURS}h.`);
 await cycle();
 setInterval(cycle, INTERVAL_MS);
