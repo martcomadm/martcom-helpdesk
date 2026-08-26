@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { currentUser, logout, pb } from '../lib/pocketbase';
+import { createNotification } from '../lib/notifications';
 import { canSupervise, canWorkTickets, roleLabel } from '../lib/roles';
 import { getTicketSla, slaBadge } from '../lib/sla';
 
@@ -9,6 +10,7 @@ const OPEN_STATUSES = new Set(['nuevo', 'en_proceso', 'esperando_usuario', 'espe
 const STALE_HOURS = 24;
 function formatDate(value) { if (!value) return '—'; return new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)); }
 function ageHours(value) { const ms = value ? new Date(value).getTime() : NaN; return Number.isFinite(ms) ? Math.max(0, (Date.now() - ms) / 3600000) : 0; }
+function personName(record) { return record?.name || record?.email || 'Usuario'; }
 
 export default function SupportPanel() {
   const navigate = useNavigate();
@@ -20,6 +22,8 @@ export default function SupportPanel() {
   const [usersById, setUsersById] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [assigningTicketId, setAssigningTicketId] = useState('');
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('todos');
   const [priority, setPriority] = useState('todas');
@@ -91,11 +95,16 @@ export default function SupportPanel() {
     const activeUsers = Object.values(usersById).filter((item) => ['admin', 'supervisor', 'soporte'].includes(item.role));
     const rows = activeUsers.map((member) => {
       const assigned = tickets.filter((ticket) => ticket.assigned_to === member.id && OPEN_STATUSES.has(ticket.status));
-      return { id: member.id, name: member.name || member.email, total: assigned.length, proceso: assigned.filter((ticket) => ticket.status === 'en_proceso').length, esperando: assigned.filter((ticket) => ['esperando_usuario', 'esperando_tercero'].includes(ticket.status)).length, vencidos: assigned.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length, riesgo: assigned.filter((ticket) => getTicketSla(ticket)?.overall === 'warning').length };
+      return { id: member.id, role: member.role, name: member.name || member.email, total: assigned.length, proceso: assigned.filter((ticket) => ticket.status === 'en_proceso').length, esperando: assigned.filter((ticket) => ['esperando_usuario', 'esperando_tercero'].includes(ticket.status)).length, vencidos: assigned.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length, riesgo: assigned.filter((ticket) => getTicketSla(ticket)?.overall === 'warning').length };
     }).sort((a, b) => a.total - b.total || a.name.localeCompare(b.name));
     const unassigned = tickets.filter((ticket) => !ticket.assigned_to && OPEN_STATUSES.has(ticket.status));
     return { rows, unassigned: unassigned.length, unassignedBreached: unassigned.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length };
   }, [tickets, usersById]);
+
+  const leastLoaded = useMemo(() => {
+    const supportAgents = workload.rows.filter((member) => member.role === 'soporte');
+    return (supportAgents.length ? supportAgents : workload.rows)[0] || null;
+  }, [workload]);
 
   const supervisorAlerts = useMemo(() => {
     const open = tickets.filter((ticket) => OPEN_STATUSES.has(ticket.status));
@@ -120,6 +129,43 @@ export default function SupportPanel() {
 
   function handleLogout() { logout(); navigate('/login'); }
   function applyAlert(value) { setAlertFilter(value); setStatus('todos'); setSlaFilter('todos'); setAssigneeFilter('todos'); }
+  function flashSuccess(message) { setSuccess(message); window.setTimeout(() => setSuccess(''), 3000); }
+
+  async function quickAssign(ticket, newAssigneeId) {
+    if (!maySupervise || !ticket || !OPEN_STATUSES.has(ticket.status)) return;
+    if ((ticket.assigned_to || '') === (newAssigneeId || '')) return;
+    const previousAssignee = ticket.expand?.assigned_to || usersById[ticket.assigned_to];
+    const newAssignee = usersById[newAssigneeId];
+    const oldName = ticket.assigned_to ? personName(previousAssignee) : 'Sin asignar';
+    const newName = newAssigneeId ? personName(newAssignee) : 'Sin asignar';
+    setAssigningTicketId(ticket.id);
+    setError('');
+    setSuccess('');
+    try {
+      await pb.collection('hd_tickets').update(ticket.id, { assigned_to: newAssigneeId || '' });
+      await pb.collection('hd_ticket_messages').create({
+        ticket: ticket.id,
+        author: user.id,
+        type: 'system',
+        message: `${personName(user)} cambió el responsable de ${oldName} a ${newName} desde el Panel de supervisión.`,
+        field: 'assigned_to',
+        old_value: ticket.assigned_to || '',
+        new_value: newAssigneeId || '',
+        internal: false,
+      });
+      if (newAssigneeId && newAssigneeId !== user.id) {
+        try {
+          await createNotification({ recipient: newAssigneeId, ticket: ticket.id, actor: user.id, type: 'assignment', title: `Ticket asignado: ${ticket.folio}`, message: ticket.title });
+        } catch (notificationError) { console.warn('La asignación se guardó, pero falló la notificación:', notificationError); }
+      }
+      await loadTickets();
+      flashSuccess(`Responsable actualizado: ${ticket.folio} → ${newName}.`);
+    } catch (err) {
+      console.error(err);
+      setError(err?.response?.message || err?.message || 'No fue posible asignar el ticket.');
+    } finally { setAssigningTicketId(''); }
+  }
+
   if (!mayWork) return <Navigate to="/" replace />;
 
   return (
@@ -137,10 +183,11 @@ export default function SupportPanel() {
 
         {!maySupervise && <article className="card" style={{ marginBottom: 18, padding: 14 }}><strong>Vista de agente</strong><p className="muted" style={{ margin: '6px 0 0' }}>Puedes tomar tickets sin asignar y trabajar los que estén asignados a ti. La reasignación, reapertura y carga global del equipo quedan reservadas a supervisión.</p></article>}
 
+        {success && <div className="success">{success}</div>}
         <div className="support-toolbar card"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar folio, asunto, solicitante, categoría, área o equipo…" /><select value={status} onChange={(e) => setStatus(e.target.value)}><option value="todos">Todos los estados</option>{Object.entries(statusLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select><select value={priority} onChange={(e) => setPriority(e.target.value)}><option value="todas">Todas las prioridades</option><option value="critica">Crítica</option><option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option></select><select value={slaFilter} onChange={(e) => setSlaFilter(e.target.value)}><option value="todos">Todos los SLA</option><option value="vencidos">SLA vencido</option><option value="riesgo">SLA en riesgo</option><option value="cumplidos">SLA cumplido</option></select><select value={category} onChange={(e) => setCategory(e.target.value)}><option value="todas">Todas las categorías</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><select value={department} onChange={(e) => setDepartment(e.target.value)}><option value="todos">Todos los departamentos</option>{departments.map((item) => <option key={item} value={item}>{item}</option>)}</select>{maySupervise && <select value={assigneeFilter} onChange={(e) => { setAlertFilter('todos'); setAssigneeFilter(e.target.value); }}><option value="todos">Todos los responsables</option><option value="sin_asignar">Sin asignar</option>{workload.rows.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select>}</div>
         <div className="support-results-head"><span>{filteredTickets.length} ticket{filteredTickets.length === 1 ? '' : 's'}</span><button className="secondary" onClick={() => { setSearch(''); setStatus('todos'); setPriority('todas'); setCategory('todas'); setDepartment('todos'); setSlaFilter('todos'); setAssigneeFilter('todos'); setAlertFilter('todos'); }}>Limpiar filtros</button></div>
         {error && <div className="error">{error}</div>}
-        {loading ? <article className="card empty-state"><p>Cargando tickets…</p></article> : filteredTickets.length === 0 ? <article className="card empty-state"><h2>Sin resultados</h2><p>No hay tickets que coincidan con los filtros seleccionados.</p></article> : <div className="support-table-wrap card"><table className="support-table"><thead><tr><th>Ticket</th><th>Solicitante</th><th>Área</th><th>Categoría</th><th>Prioridad</th><th>Estado</th><th>SLA</th><th>Responsable</th><th>Creado</th></tr></thead><tbody>{filteredTickets.map((ticket) => { const sla=slaBadge(ticket); return <tr key={ticket.id} onClick={() => navigate(`/tickets/${ticket.id}`, {state:{from:'/support'}})}><td><strong>{ticket.folio}</strong><span className="table-subtext">{ticket.title}</span></td><td>{requesterLabel(ticket)}</td><td>{ticket.department||'—'}</td><td>{ticket.expand?.category?.name||'—'}</td><td><strong className={`priority-${ticket.priority}`}>{ticket.priority||'—'}</strong></td><td><span className={`status-badge status-${ticket.status}`}>{statusLabels[ticket.status]||ticket.status}</span></td><td><span className={`sla-badge sla-${sla.tone}`}>{sla.label}</span></td><td>{assigneeLabel(ticket)}</td><td>{formatDate(ticket.created)}</td></tr>; })}</tbody></table></div>}
+        {loading ? <article className="card empty-state"><p>Cargando tickets…</p></article> : filteredTickets.length === 0 ? <article className="card empty-state"><h2>Sin resultados</h2><p>No hay tickets que coincidan con los filtros seleccionados.</p></article> : <div className="support-table-wrap card"><table className="support-table"><thead><tr><th>Ticket</th><th>Solicitante</th><th>Área</th><th>Categoría</th><th>Prioridad</th><th>Estado</th><th>SLA</th><th>Responsable</th><th>Creado</th>{maySupervise && <th>Acciones</th>}</tr></thead><tbody>{filteredTickets.map((ticket) => { const sla=slaBadge(ticket); const assigning = assigningTicketId === ticket.id; return <tr key={ticket.id} onClick={() => navigate(`/tickets/${ticket.id}`, {state:{from:'/support'}})}><td><strong>{ticket.folio}</strong><span className="table-subtext">{ticket.title}</span></td><td>{requesterLabel(ticket)}</td><td>{ticket.department||'—'}</td><td>{ticket.expand?.category?.name||'—'}</td><td><strong className={`priority-${ticket.priority}`}>{ticket.priority||'—'}</strong></td><td><span className={`status-badge status-${ticket.status}`}>{statusLabels[ticket.status]||ticket.status}</span></td><td><span className={`sla-badge sla-${sla.tone}`}>{sla.label}</span></td><td>{assigneeLabel(ticket)}</td><td>{formatDate(ticket.created)}</td>{maySupervise && <td onClick={(e) => e.stopPropagation()}><div style={{display:'grid',gap:6,minWidth:185}}><select value={ticket.assigned_to || ''} disabled={assigning || !OPEN_STATUSES.has(ticket.status)} onChange={(e) => quickAssign(ticket, e.target.value)}><option value="">Sin asignar</option>{workload.rows.map((member) => <option key={member.id} value={member.id}>{member.name} ({member.total})</option>)}</select>{leastLoaded && OPEN_STATUSES.has(ticket.status) && ticket.assigned_to !== leastLoaded.id && <button className="secondary" disabled={assigning} onClick={() => quickAssign(ticket, leastLoaded.id)}>{assigning ? 'Asignando…' : `Menor carga: ${leastLoaded.name}`}</button>}<button className="secondary" onClick={() => navigate(`/tickets/${ticket.id}`, {state:{from:'/support'}})}>Abrir detalle</button></div></td>}</tr>; })}</tbody></table></div>}
       </section>
     </main>
   );
