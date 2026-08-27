@@ -13,182 +13,29 @@ function ageHours(value) { const ms = value ? new Date(value).getTime() : NaN; r
 function personName(record) { return record?.name || record?.email || 'Usuario'; }
 
 export default function SupportPanel() {
-  const navigate = useNavigate();
-  const user = currentUser();
-  const mayWork = canWorkTickets(user);
-  const maySupervise = canSupervise(user);
-  const [tickets, setTickets] = useState([]);
-  const [categories, setCategories] = useState([]);
-  const [usersById, setUsersById] = useState({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [assigningTicketId, setAssigningTicketId] = useState('');
-  const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('todos');
-  const [priority, setPriority] = useState('todas');
-  const [category, setCategory] = useState('todas');
-  const [department, setDepartment] = useState('todos');
-  const [slaFilter, setSlaFilter] = useState('todos');
-  const [assigneeFilter, setAssigneeFilter] = useState('todos');
-  const [alertFilter, setAlertFilter] = useState('todos');
-  const [realtimeReady, setRealtimeReady] = useState(false);
-  const [, setClock] = useState(Date.now());
-
-  async function loadTickets() {
-    const ticketRecords = await pb.collection('hd_tickets').getFullList({ sort: '-created', expand: 'category,requester,assigned_to' });
-    setTickets(ticketRecords);
-  }
-
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const [, categoryRecords] = await Promise.all([loadTickets(), pb.collection('hd_categories').getFullList({ filter: 'active = true', sort: 'order,name' })]);
-        setCategories(categoryRecords);
-        try {
-          const userRecords = await pb.collection('hd_users').getFullList({ filter: 'active = true', sort: 'name,email' });
-          setUsersById(Object.fromEntries(userRecords.map((item) => [item.id, item])));
-        } catch (userError) { console.warn('No fue posible cargar hd_users para expandir nombres:', userError); }
-      } catch (err) {
-        console.error(err);
-        setError(err?.response?.message || err?.message || 'No fue posible cargar el panel de soporte.');
-      } finally { setLoading(false); }
-    }
-    loadData();
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setClock(Date.now()), 60000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    let unsubscribeTickets; let active = true;
-    async function connectRealtime() {
-      try {
-        unsubscribeTickets = await pb.collection('hd_tickets').subscribe('*', async () => {
-          if (!active) return;
-          try { await loadTickets(); } catch (err) { console.warn('Error actualizando panel en tiempo real:', err); }
-        });
-        if (active) setRealtimeReady(true);
-      } catch (err) { console.warn('No fue posible iniciar Realtime en el panel:', err); if (active) setRealtimeReady(false); }
-    }
-    connectRealtime();
-    return () => { active = false; if (unsubscribeTickets) unsubscribeTickets(); };
-  }, []);
-
-  function requesterLabel(ticket) {
-    const record = ticket.expand?.requester || usersById[ticket.requester];
-    if (record?.name) return record.name;
-    if (record?.email) return record.email;
-    if (ticket.requester === user?.id) return user?.name || user?.email || 'Usuario actual';
-    return '—';
-  }
-  function assigneeLabel(ticket) {
-    const record = ticket.expand?.assigned_to || usersById[ticket.assigned_to];
-    return record?.name || record?.email || 'Sin asignar';
-  }
-
-  const departments = useMemo(() => [...new Set(tickets.map((ticket) => ticket.department).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [tickets]);
-
-  const workload = useMemo(() => {
-    const activeUsers = Object.values(usersById).filter((item) => ['admin', 'supervisor', 'soporte'].includes(item.role));
-    const rows = activeUsers.map((member) => {
-      const assigned = tickets.filter((ticket) => ticket.assigned_to === member.id && OPEN_STATUSES.has(ticket.status));
-      return { id: member.id, role: member.role, name: member.name || member.email, total: assigned.length, proceso: assigned.filter((ticket) => ticket.status === 'en_proceso').length, esperando: assigned.filter((ticket) => ['esperando_usuario', 'esperando_tercero'].includes(ticket.status)).length, vencidos: assigned.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length, riesgo: assigned.filter((ticket) => getTicketSla(ticket)?.overall === 'warning').length };
-    }).sort((a, b) => a.total - b.total || a.name.localeCompare(b.name));
-    const unassigned = tickets.filter((ticket) => !ticket.assigned_to && OPEN_STATUSES.has(ticket.status));
-    return { rows, unassigned: unassigned.length, unassignedBreached: unassigned.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length };
-  }, [tickets, usersById]);
-
-  const leastLoaded = useMemo(() => {
-    const supportAgents = workload.rows.filter((member) => member.role === 'soporte');
-    return (supportAgents.length ? supportAgents : workload.rows)[0] || null;
-  }, [workload]);
-
-  const supervisorAlerts = useMemo(() => {
-    const open = tickets.filter((ticket) => OPEN_STATUSES.has(ticket.status));
-    return { unassigned: open.filter((ticket) => !ticket.assigned_to).length, breached: open.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length, risk: open.filter((ticket) => getTicketSla(ticket)?.overall === 'warning').length, waitingUser: open.filter((ticket) => ticket.status === 'esperando_usuario').length, stale: open.filter((ticket) => ageHours(ticket.updated || ticket.created) >= STALE_HOURS).length };
-  }, [tickets]);
-
-  const filteredTickets = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return tickets.filter((ticket) => {
-      const requester = requesterLabel(ticket);
-      const categoryName = ticket.expand?.category?.name || '';
-      const sla = getTicketSla(ticket);
-      const matchesSearch = !term || [ticket.folio, ticket.title, ticket.description, requester, categoryName, ticket.department, ticket.equipment].some((value) => String(value || '').toLowerCase().includes(term));
-      const matchesSla = slaFilter === 'todos' || (slaFilter === 'vencidos' && sla?.overall === 'breached') || (slaFilter === 'riesgo' && sla?.overall === 'warning') || (slaFilter === 'cumplidos' && sla?.overall === 'met');
-      const matchesAssignee = assigneeFilter === 'todos' || (assigneeFilter === 'sin_asignar' ? !ticket.assigned_to : ticket.assigned_to === assigneeFilter);
-      const matchesAlert = alertFilter === 'todos' || (alertFilter === 'sin_asignar' && OPEN_STATUSES.has(ticket.status) && !ticket.assigned_to) || (alertFilter === 'vencidos' && OPEN_STATUSES.has(ticket.status) && sla?.overall === 'breached') || (alertFilter === 'riesgo' && OPEN_STATUSES.has(ticket.status) && sla?.overall === 'warning') || (alertFilter === 'esperando_usuario' && ticket.status === 'esperando_usuario') || (alertFilter === 'sin_movimiento' && OPEN_STATUSES.has(ticket.status) && ageHours(ticket.updated || ticket.created) >= STALE_HOURS);
-      return matchesSearch && matchesSla && matchesAssignee && matchesAlert && (status === 'todos' || ticket.status === status) && (priority === 'todas' || ticket.priority === priority) && (category === 'todas' || ticket.category === category) && (department === 'todos' || ticket.department === department);
-    });
-  }, [tickets, usersById, search, status, priority, category, department, slaFilter, assigneeFilter, alertFilter]);
-
-  const stats = useMemo(() => ({ nuevos: tickets.filter((ticket) => ticket.status === 'nuevo').length, proceso: tickets.filter((ticket) => ticket.status === 'en_proceso').length, esperando: tickets.filter((ticket) => ['esperando_usuario', 'esperando_tercero'].includes(ticket.status)).length, vencidos: tickets.filter((ticket) => getTicketSla(ticket)?.overall === 'breached').length }), [tickets]);
-
-  function handleLogout() { logout(); navigate('/login'); }
-  function applyAlert(value) { setAlertFilter(value); setStatus('todos'); setSlaFilter('todos'); setAssigneeFilter('todos'); }
-  function flashSuccess(message) { setSuccess(message); window.setTimeout(() => setSuccess(''), 3000); }
-
-  async function quickAssign(ticket, newAssigneeId) {
-    if (!maySupervise || !ticket || !OPEN_STATUSES.has(ticket.status)) return;
-    if ((ticket.assigned_to || '') === (newAssigneeId || '')) return;
-    const previousAssignee = ticket.expand?.assigned_to || usersById[ticket.assigned_to];
-    const newAssignee = usersById[newAssigneeId];
-    const oldName = ticket.assigned_to ? personName(previousAssignee) : 'Sin asignar';
-    const newName = newAssigneeId ? personName(newAssignee) : 'Sin asignar';
-    setAssigningTicketId(ticket.id);
-    setError('');
-    setSuccess('');
-    try {
-      await pb.collection('hd_tickets').update(ticket.id, { assigned_to: newAssigneeId || '' });
-      await pb.collection('hd_ticket_messages').create({
-        ticket: ticket.id,
-        author: user.id,
-        type: 'system',
-        message: `${personName(user)} cambió el responsable de ${oldName} a ${newName} desde el Panel de supervisión.`,
-        field: 'assigned_to',
-        old_value: ticket.assigned_to || '',
-        new_value: newAssigneeId || '',
-        internal: false,
-      });
-      if (newAssigneeId && newAssigneeId !== user.id) {
-        try {
-          await createNotification({ recipient: newAssigneeId, ticket: ticket.id, actor: user.id, type: 'assignment', title: `Ticket asignado: ${ticket.folio}`, message: ticket.title });
-        } catch (notificationError) { console.warn('La asignación se guardó, pero falló la notificación:', notificationError); }
-      }
-      await loadTickets();
-      flashSuccess(`Responsable actualizado: ${ticket.folio} → ${newName}.`);
-    } catch (err) {
-      console.error(err);
-      setError(err?.response?.message || err?.message || 'No fue posible asignar el ticket.');
-    } finally { setAssigningTicketId(''); }
-  }
-
-  if (!mayWork) return <Navigate to="/" replace />;
-
-  return (
-    <main className="app-shell">
-      <aside className="sidebar"><div><p className="eyebrow">MARTCOM</p><h2>Soporte IT</h2></div><nav>{maySupervise && <a onClick={() => navigate('/')}>Dashboard</a>}<a onClick={() => navigate('/tickets/new')}>Crear ticket</a><a onClick={() => navigate('/tickets/mine')}>Mis tickets</a><a className="active">Panel de soporte</a></nav><button className="secondary" onClick={handleLogout}>Cerrar sesión</button></aside>
-      <section className="content">
-        <header className="topbar"><div><p className="muted">Mesa de ayuda</p><h1>Panel de soporte</h1><p className="muted">Bandeja general de incidencias, solicitudes y cumplimiento de SLA.</p></div><div className="topbar-badges"><span className={`live-badge ${realtimeReady ? 'online' : ''}`}>● {realtimeReady ? 'En vivo' : 'Conectando'}</span><span className="role-badge">{roleLabel(user)}</span></div></header>
-        <div className="stats-grid support-stats"><article className="card"><span>Nuevos</span><strong>{stats.nuevos}</strong></article><article className="card"><span>En proceso</span><strong>{stats.proceso}</strong></article><article className="card"><span>Esperando</span><strong>{stats.esperando}</strong></article><article className="card"><span>SLA vencido</span><strong className={stats.vencidos ? 'priority-critica' : ''}>{stats.vencidos}</strong></article></div>
-
-        {maySupervise && <article className="card" style={{ marginBottom: 18 }}><div style={{ marginBottom: 14 }}><p className="eyebrow">SUPERVISIÓN</p><h2 style={{ margin: '4px 0' }}>Alertas operativas</h2><p className="muted" style={{ margin: 0 }}>Casos que requieren atención del supervisor. Pulsa una tarjeta para filtrar la bandeja.</p></div><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 10 }}>
-          {[['sin_asignar','Sin asignar',supervisorAlerts.unassigned,'Abiertos sin responsable'],['vencidos','SLA vencido',supervisorAlerts.breached,'Requieren escalamiento'],['riesgo','En riesgo',supervisorAlerts.risk,'Próximos a vencer'],['esperando_usuario','Esperando usuario',supervisorAlerts.waitingUser,'Pendientes de respuesta'],['sin_movimiento','Sin movimiento >24 h',supervisorAlerts.stale,'Abiertos sin actualización']].map(([key,label,count,help]) => <button key={key} onClick={() => applyAlert(key)} style={{ textAlign:'left',padding:14,borderRadius:12,border:alertFilter===key?'1px solid #69a7ff':'1px solid #263550',background:'#0e1628',color:'inherit',cursor:'pointer' }}><span className="muted">{label}</span><strong className={key==='vencidos'&&count?'priority-critica':''} style={{display:'block',fontSize:26,marginTop:5}}>{count}</strong><small className="muted">{help}</small></button>)}
-        </div>{alertFilter !== 'todos' && <div style={{marginTop:12}}><button className="secondary" onClick={() => setAlertFilter('todos')}>Quitar alerta activa</button></div>}</article>}
-
-        {maySupervise && <article className="card" style={{ marginBottom: 18 }}><div style={{ display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:16,marginBottom:16 }}><div><p className="eyebrow">CARGA OPERATIVA</p><h2 style={{margin:'4px 0'}}>Carga por responsable</h2><p className="muted" style={{margin:0}}>Tickets abiertos por integrante. Ordenado de menor a mayor carga para facilitar la asignación.</p></div><button className="secondary" onClick={() => { setAlertFilter('todos'); setAssigneeFilter('sin_asignar'); }}>Sin asignar: {workload.unassigned}{workload.unassignedBreached ? ` · ${workload.unassignedBreached} vencido${workload.unassignedBreached === 1 ? '' : 's'}` : ''}</button></div>{workload.rows.length === 0 ? <p className="muted">No hay responsables activos disponibles.</p> : <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(230px,1fr))',gap:12}}>{workload.rows.map((member,index) => <button key={member.id} onClick={() => { setAlertFilter('todos'); setAssigneeFilter(member.id); }} style={{textAlign:'left',background:'#0e1628',border:'1px solid #263550',borderRadius:12,padding:14,color:'inherit',cursor:'pointer'}}><div style={{display:'flex',justifyContent:'space-between',gap:10,alignItems:'center'}}><strong>{member.name}</strong><span className="sla-badge sla-ok">{member.total} abierto{member.total===1?'':'s'}</span></div><div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginTop:12,fontSize:11,color:'#9aa9c1'}}><span>Proceso <strong style={{display:'block',color:'#e8edf6',fontSize:16}}>{member.proceso}</strong></span><span>Espera <strong style={{display:'block',color:'#e8edf6',fontSize:16}}>{member.esperando}</strong></span><span>Vencidos <strong style={{display:'block',color:member.vencidos?'#ffb4bf':'#e8edf6',fontSize:16}}>{member.vencidos}</strong></span></div><small style={{display:'block',marginTop:10,color:'#7485a4'}}>{index===0?'Menor carga actual · ':''}{member.riesgo} en riesgo</small></button>)}</div>}</article>}
-
-        {!maySupervise && <article className="card" style={{ marginBottom: 18, padding: 14 }}><strong>Vista de agente</strong><p className="muted" style={{ margin: '6px 0 0' }}>Puedes tomar tickets sin asignar y trabajar los que estén asignados a ti. La reasignación, reapertura y carga global del equipo quedan reservadas a supervisión.</p></article>}
-
-        {success && <div className="success">{success}</div>}
-        <div className="support-toolbar card"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar folio, asunto, solicitante, categoría, área o equipo…" /><select value={status} onChange={(e) => setStatus(e.target.value)}><option value="todos">Todos los estados</option>{Object.entries(statusLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select><select value={priority} onChange={(e) => setPriority(e.target.value)}><option value="todas">Todas las prioridades</option><option value="critica">Crítica</option><option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option></select><select value={slaFilter} onChange={(e) => setSlaFilter(e.target.value)}><option value="todos">Todos los SLA</option><option value="vencidos">SLA vencido</option><option value="riesgo">SLA en riesgo</option><option value="cumplidos">SLA cumplido</option></select><select value={category} onChange={(e) => setCategory(e.target.value)}><option value="todas">Todas las categorías</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><select value={department} onChange={(e) => setDepartment(e.target.value)}><option value="todos">Todos los departamentos</option>{departments.map((item) => <option key={item} value={item}>{item}</option>)}</select>{maySupervise && <select value={assigneeFilter} onChange={(e) => { setAlertFilter('todos'); setAssigneeFilter(e.target.value); }}><option value="todos">Todos los responsables</option><option value="sin_asignar">Sin asignar</option>{workload.rows.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select>}</div>
-        <div className="support-results-head"><span>{filteredTickets.length} ticket{filteredTickets.length === 1 ? '' : 's'}</span><button className="secondary" onClick={() => { setSearch(''); setStatus('todos'); setPriority('todas'); setCategory('todas'); setDepartment('todos'); setSlaFilter('todos'); setAssigneeFilter('todos'); setAlertFilter('todos'); }}>Limpiar filtros</button></div>
-        {error && <div className="error">{error}</div>}
-        {loading ? <article className="card empty-state"><p>Cargando tickets…</p></article> : filteredTickets.length === 0 ? <article className="card empty-state"><h2>Sin resultados</h2><p>No hay tickets que coincidan con los filtros seleccionados.</p></article> : <div className="support-table-wrap card"><table className="support-table"><thead><tr><th>Ticket</th><th>Solicitante</th><th>Área</th><th>Categoría</th><th>Prioridad</th><th>Estado</th><th>SLA</th><th>Responsable</th><th>Creado</th>{maySupervise && <th>Acciones</th>}</tr></thead><tbody>{filteredTickets.map((ticket) => { const sla=slaBadge(ticket); const assigning = assigningTicketId === ticket.id; return <tr key={ticket.id} onClick={() => navigate(`/tickets/${ticket.id}`, {state:{from:'/support'}})}><td><strong>{ticket.folio}</strong><span className="table-subtext">{ticket.title}</span></td><td>{requesterLabel(ticket)}</td><td>{ticket.department||'—'}</td><td>{ticket.expand?.category?.name||'—'}</td><td><strong className={`priority-${ticket.priority}`}>{ticket.priority||'—'}</strong></td><td><span className={`status-badge status-${ticket.status}`}>{statusLabels[ticket.status]||ticket.status}</span></td><td><span className={`sla-badge sla-${sla.tone}`}>{sla.label}</span></td><td>{assigneeLabel(ticket)}</td><td>{formatDate(ticket.created)}</td>{maySupervise && <td onClick={(e) => e.stopPropagation()}><div style={{display:'grid',gap:6,minWidth:185}}><select value={ticket.assigned_to || ''} disabled={assigning || !OPEN_STATUSES.has(ticket.status)} onChange={(e) => quickAssign(ticket, e.target.value)}><option value="">Sin asignar</option>{workload.rows.map((member) => <option key={member.id} value={member.id}>{member.name} ({member.total})</option>)}</select>{leastLoaded && OPEN_STATUSES.has(ticket.status) && ticket.assigned_to !== leastLoaded.id && <button className="secondary" disabled={assigning} onClick={() => quickAssign(ticket, leastLoaded.id)}>{assigning ? 'Asignando…' : `Menor carga: ${leastLoaded.name}`}</button>}<button className="secondary" onClick={() => navigate(`/tickets/${ticket.id}`, {state:{from:'/support'}})}>Abrir detalle</button></div></td>}</tr>; })}</tbody></table></div>}
-      </section>
-    </main>
-  );
+  const navigate = useNavigate(); const user = currentUser(); const mayWork = canWorkTickets(user); const maySupervise = canSupervise(user);
+  const [tickets,setTickets]=useState([]); const [categories,setCategories]=useState([]); const [usersById,setUsersById]=useState({}); const [loading,setLoading]=useState(true); const [error,setError]=useState(''); const [success,setSuccess]=useState(''); const [assigningTicketId,setAssigningTicketId]=useState(''); const [search,setSearch]=useState(''); const [status,setStatus]=useState('todos'); const [priority,setPriority]=useState('todas'); const [category,setCategory]=useState('todas'); const [department,setDepartment]=useState('todos'); const [slaFilter,setSlaFilter]=useState('todos'); const [assigneeFilter,setAssigneeFilter]=useState('todos'); const [alertFilter,setAlertFilter]=useState('todos'); const [realtimeReady,setRealtimeReady]=useState(false); const [,setClock]=useState(Date.now());
+  async function loadTickets(){setTickets(await pb.collection('hd_tickets').getFullList({sort:'-created',expand:'category,requester,assigned_to'}));}
+  useEffect(()=>{async function loadData(){try{const [,cats]=await Promise.all([loadTickets(),pb.collection('hd_categories').getFullList({filter:'active = true',sort:'order,name'})]);setCategories(cats);try{const us=await pb.collection('hd_users').getFullList({filter:'active = true',sort:'name,email'});setUsersById(Object.fromEntries(us.map(i=>[i.id,i])));}catch(e){console.warn('No fue posible cargar hd_users para expandir nombres:',e);}}catch(err){console.error(err);setError(err?.response?.message||err?.message||'No fue posible cargar el panel de soporte.');}finally{setLoading(false);}}loadData();},[]);
+  useEffect(()=>{const timer=window.setInterval(()=>setClock(Date.now()),60000);return()=>window.clearInterval(timer);},[]);
+  useEffect(()=>{let unsub,active=true;(async()=>{try{unsub=await pb.collection('hd_tickets').subscribe('*',async()=>{if(active)try{await loadTickets();}catch(e){console.warn('Error actualizando panel en tiempo real:',e);}});if(active)setRealtimeReady(true);}catch(e){console.warn('No fue posible iniciar Realtime en el panel:',e);if(active)setRealtimeReady(false);}})();return()=>{active=false;if(unsub)unsub();};},[]);
+  function requesterLabel(t){const r=t.expand?.requester||usersById[t.requester];return r?.name||r?.email||(t.requester===user?.id?(user?.name||user?.email||'Usuario actual'):'—');}
+  function assigneeLabel(t){const r=t.expand?.assigned_to||usersById[t.assigned_to];return r?.name||r?.email||'Sin asignar';}
+  const departments=useMemo(()=>[...new Set(tickets.map(t=>t.department).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),[tickets]);
+  const workload=useMemo(()=>{const active=Object.values(usersById).filter(i=>['admin','supervisor','soporte'].includes(i.role));const rows=active.map(m=>{const assigned=tickets.filter(t=>t.assigned_to===m.id&&OPEN_STATUSES.has(t.status));return{id:m.id,role:m.role,name:m.name||m.email,total:assigned.length,proceso:assigned.filter(t=>t.status==='en_proceso').length,esperando:assigned.filter(t=>['esperando_usuario','esperando_tercero'].includes(t.status)).length,vencidos:assigned.filter(t=>getTicketSla(t)?.overall==='breached').length,riesgo:assigned.filter(t=>getTicketSla(t)?.overall==='warning').length};}).sort((a,b)=>a.total-b.total||a.name.localeCompare(b.name));const unassigned=tickets.filter(t=>!t.assigned_to&&OPEN_STATUSES.has(t.status));return{rows,unassigned:unassigned.length,unassignedBreached:unassigned.filter(t=>getTicketSla(t)?.overall==='breached').length};},[tickets,usersById]);
+  const leastLoaded=useMemo(()=>{const s=workload.rows.filter(m=>m.role==='soporte');return(s.length?s:workload.rows)[0]||null;},[workload]);
+  const supervisorAlerts=useMemo(()=>{const open=tickets.filter(t=>OPEN_STATUSES.has(t.status));return{unassigned:open.filter(t=>!t.assigned_to).length,breached:open.filter(t=>getTicketSla(t)?.overall==='breached').length,risk:open.filter(t=>getTicketSla(t)?.overall==='warning').length,waitingUser:open.filter(t=>t.status==='esperando_usuario').length,stale:open.filter(t=>ageHours(t.updated||t.created)>=STALE_HOURS).length};},[tickets]);
+  const filteredTickets=useMemo(()=>{const term=search.trim().toLowerCase();return tickets.filter(t=>{const req=requesterLabel(t),cat=t.expand?.category?.name||'',sla=getTicketSla(t);const ms=!term||[t.folio,t.title,t.description,req,cat,t.department,t.equipment].some(v=>String(v||'').toLowerCase().includes(term));const msl=slaFilter==='todos'||(slaFilter==='vencidos'&&sla?.overall==='breached')||(slaFilter==='riesgo'&&sla?.overall==='warning')||(slaFilter==='cumplidos'&&sla?.overall==='met');const ma=assigneeFilter==='todos'||(assigneeFilter==='sin_asignar'?!t.assigned_to:t.assigned_to===assigneeFilter);const mal=alertFilter==='todos'||(alertFilter==='sin_asignar'&&OPEN_STATUSES.has(t.status)&&!t.assigned_to)||(alertFilter==='vencidos'&&OPEN_STATUSES.has(t.status)&&sla?.overall==='breached')||(alertFilter==='riesgo'&&OPEN_STATUSES.has(t.status)&&sla?.overall==='warning')||(alertFilter==='esperando_usuario'&&t.status==='esperando_usuario')||(alertFilter==='sin_movimiento'&&OPEN_STATUSES.has(t.status)&&ageHours(t.updated||t.created)>=STALE_HOURS);return ms&&msl&&ma&&mal&&(status==='todos'||t.status===status)&&(priority==='todas'||t.priority===priority)&&(category==='todas'||t.category===category)&&(department==='todos'||t.department===department);});},[tickets,usersById,search,status,priority,category,department,slaFilter,assigneeFilter,alertFilter]);
+  const stats=useMemo(()=>({nuevos:tickets.filter(t=>t.status==='nuevo').length,proceso:tickets.filter(t=>t.status==='en_proceso').length,esperando:tickets.filter(t=>['esperando_usuario','esperando_tercero'].includes(t.status)).length,vencidos:tickets.filter(t=>getTicketSla(t)?.overall==='breached').length}),[tickets]);
+  function handleLogout(){logout();navigate('/login');} function applyAlert(v){setAlertFilter(v);setStatus('todos');setSlaFilter('todos');setAssigneeFilter('todos');} function flashSuccess(m){setSuccess(m);window.setTimeout(()=>setSuccess(''),3000);}
+  async function quickAssign(ticket,newAssigneeId){if(!maySupervise||!ticket||!OPEN_STATUSES.has(ticket.status)||((ticket.assigned_to||'')===(newAssigneeId||'')))return;const prev=ticket.expand?.assigned_to||usersById[ticket.assigned_to],next=usersById[newAssigneeId],oldName=ticket.assigned_to?personName(prev):'Sin asignar',newName=newAssigneeId?personName(next):'Sin asignar';setAssigningTicketId(ticket.id);setError('');setSuccess('');try{await pb.collection('hd_tickets').update(ticket.id,{assigned_to:newAssigneeId||''});await pb.collection('hd_ticket_messages').create({ticket:ticket.id,author:user.id,type:'system',message:`${personName(user)} cambió el responsable de ${oldName} a ${newName} desde el Panel de supervisión.`,field:'assigned_to',old_value:ticket.assigned_to||'',new_value:newAssigneeId||'',internal:false});if(newAssigneeId&&newAssigneeId!==user.id)try{await createNotification({recipient:newAssigneeId,ticket:ticket.id,actor:user.id,type:'assignment',title:`Ticket asignado: ${ticket.folio}`,message:ticket.title});}catch(e){console.warn('La asignación se guardó, pero falló la notificación:',e);}await loadTickets();flashSuccess(`Responsable actualizado: ${ticket.folio} → ${newName}.`);}catch(err){console.error(err);setError(err?.response?.message||err?.message||'No fue posible asignar el ticket.');}finally{setAssigningTicketId('');}}
+  if(!mayWork)return <Navigate to="/" replace/>;
+  return <main className="app-shell"><aside className="sidebar"><div><p className="eyebrow">MARTCOM</p><h2>Soporte IT</h2></div><nav>{maySupervise&&<a onClick={()=>navigate('/')}>Dashboard</a>}<a onClick={()=>navigate('/tickets/new')}>Crear ticket</a><a onClick={()=>navigate('/tickets/mine')}>Mis tickets</a><a className="active">Panel de soporte</a>{maySupervise&&<a onClick={()=>navigate('/reports')}>Reportes</a>}</nav><button className="secondary" onClick={handleLogout}>Cerrar sesión</button></aside><section className="content">
+<header className="topbar"><div><p className="muted">Mesa de ayuda</p><h1>Panel de soporte</h1><p className="muted">Bandeja general de incidencias, solicitudes y cumplimiento de SLA.</p></div><div className="topbar-badges"><span className={`live-badge ${realtimeReady?'online':''}`}>● {realtimeReady?'En vivo':'Conectando'}</span><span className="role-badge">{roleLabel(user)}</span></div></header>
+<div className="stats-grid support-stats"><article className="card"><span>Nuevos</span><strong>{stats.nuevos}</strong></article><article className="card"><span>En proceso</span><strong>{stats.proceso}</strong></article><article className="card"><span>Esperando</span><strong>{stats.esperando}</strong></article><article className="card"><span>SLA vencido</span><strong className={stats.vencidos?'priority-critica':''}>{stats.vencidos}</strong></article></div>
+{maySupervise&&<article className="card" style={{marginBottom:18}}><div style={{marginBottom:14}}><p className="eyebrow">SUPERVISIÓN</p><h2 style={{margin:'4px 0'}}>Alertas operativas</h2><p className="muted" style={{margin:0}}>Casos que requieren atención del supervisor. Pulsa una tarjeta para filtrar la bandeja.</p></div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:10}}>{[['sin_asignar','Sin asignar',supervisorAlerts.unassigned,'Abiertos sin responsable'],['vencidos','SLA vencido',supervisorAlerts.breached,'Requieren escalamiento'],['riesgo','En riesgo',supervisorAlerts.risk,'Próximos a vencer'],['esperando_usuario','Esperando usuario',supervisorAlerts.waitingUser,'Pendientes de respuesta'],['sin_movimiento','Sin movimiento >24 h',supervisorAlerts.stale,'Abiertos sin actualización']].map(([key,label,count,help])=><button key={key} onClick={()=>applyAlert(key)} style={{textAlign:'left',padding:14,borderRadius:12,border:alertFilter===key?'1px solid #69a7ff':'1px solid #263550',background:'#0e1628',color:'inherit',cursor:'pointer'}}><span className="muted">{label}</span><strong className={key==='vencidos'&&count?'priority-critica':''} style={{display:'block',fontSize:26,marginTop:5}}>{count}</strong><small className="muted">{help}</small></button>)}</div>{alertFilter!=='todos'&&<div style={{marginTop:12}}><button className="secondary" onClick={()=>setAlertFilter('todos')}>Quitar alerta activa</button></div>}</article>}
+{maySupervise&&<article className="card" style={{marginBottom:18}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:16,marginBottom:16}}><div><p className="eyebrow">CARGA OPERATIVA</p><h2 style={{margin:'4px 0'}}>Carga por responsable</h2><p className="muted" style={{margin:0}}>Tickets abiertos por integrante. Ordenado de menor a mayor carga para facilitar la asignación.</p></div><button className="secondary" onClick={()=>{setAlertFilter('todos');setAssigneeFilter('sin_asignar');}}>Sin asignar: {workload.unassigned}{workload.unassignedBreached?` · ${workload.unassignedBreached} vencido${workload.unassignedBreached===1?'':'s'}`:''}</button></div>{workload.rows.length===0?<p className="muted">No hay responsables activos disponibles.</p>:<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(230px,1fr))',gap:12}}>{workload.rows.map((m,index)=><button key={m.id} onClick={()=>{setAlertFilter('todos');setAssigneeFilter(m.id);}} style={{textAlign:'left',background:'#0e1628',border:'1px solid #263550',borderRadius:12,padding:14,color:'inherit',cursor:'pointer'}}><div style={{display:'flex',justifyContent:'space-between',gap:10,alignItems:'center'}}><strong>{m.name}</strong><span className="sla-badge sla-ok">{m.total} abierto{m.total===1?'':'s'}</span></div><div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginTop:12,fontSize:11,color:'#9aa9c1'}}><span>Proceso <strong style={{display:'block',color:'#e8edf6',fontSize:16}}>{m.proceso}</strong></span><span>Espera <strong style={{display:'block',color:'#e8edf6',fontSize:16}}>{m.esperando}</strong></span><span>Vencidos <strong style={{display:'block',color:m.vencidos?'#ffb4bf':'#e8edf6',fontSize:16}}>{m.vencidos}</strong></span></div><small style={{display:'block',marginTop:10,color:'#7485a4'}}>{index===0?'Menor carga actual · ':''}{m.riesgo} en riesgo</small></button>)}</div>}</article>}
+{!maySupervise&&<article className="card" style={{marginBottom:18,padding:14}}><strong>Vista de agente</strong><p className="muted" style={{margin:'6px 0 0'}}>Puedes tomar tickets sin asignar y trabajar los que estén asignados a ti. La reasignación, reapertura y carga global del equipo quedan reservadas a supervisión.</p></article>}
+{success&&<div className="success">{success}</div>}<div className="support-toolbar card"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar folio, asunto, solicitante, categoría, área o equipo…"/><select value={status} onChange={e=>setStatus(e.target.value)}><option value="todos">Todos los estados</option>{Object.entries(statusLabels).map(([v,l])=><option key={v} value={v}>{l}</option>)}</select><select value={priority} onChange={e=>setPriority(e.target.value)}><option value="todas">Todas las prioridades</option><option value="critica">Crítica</option><option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option></select><select value={slaFilter} onChange={e=>setSlaFilter(e.target.value)}><option value="todos">Todos los SLA</option><option value="vencidos">SLA vencido</option><option value="riesgo">SLA en riesgo</option><option value="cumplidos">SLA cumplido</option></select><select value={category} onChange={e=>setCategory(e.target.value)}><option value="todas">Todas las categorías</option>{categories.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}</select><select value={department} onChange={e=>setDepartment(e.target.value)}><option value="todos">Todos los departamentos</option>{departments.map(i=><option key={i} value={i}>{i}</option>)}</select>{maySupervise&&<select value={assigneeFilter} onChange={e=>{setAlertFilter('todos');setAssigneeFilter(e.target.value);}}><option value="todos">Todos los responsables</option><option value="sin_asignar">Sin asignar</option>{workload.rows.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select>}</div>
+<div className="support-results-head"><span>{filteredTickets.length} ticket{filteredTickets.length===1?'':'s'}</span><button className="secondary" onClick={()=>{setSearch('');setStatus('todos');setPriority('todas');setCategory('todas');setDepartment('todos');setSlaFilter('todos');setAssigneeFilter('todos');setAlertFilter('todos');}}>Limpiar filtros</button></div>{error&&<div className="error">{error}</div>}{loading?<article className="card empty-state"><p>Cargando tickets…</p></article>:filteredTickets.length===0?<article className="card empty-state"><h2>Sin resultados</h2><p>No hay tickets que coincidan con los filtros seleccionados.</p></article>:<div className="support-table-wrap card"><table className="support-table"><thead><tr><th>Ticket</th><th>Solicitante</th><th>Área</th><th>Categoría</th><th>Prioridad</th><th>Estado</th><th>SLA</th><th>Responsable</th><th>Creado</th>{maySupervise&&<th>Acciones</th>}</tr></thead><tbody>{filteredTickets.map(t=>{const sla=slaBadge(t),assigning=assigningTicketId===t.id;return <tr key={t.id} onClick={()=>navigate(`/tickets/${t.id}`,{state:{from:'/support'}})}><td><strong>{t.folio}</strong><span className="table-subtext">{t.title}</span></td><td>{requesterLabel(t)}</td><td>{t.department||'—'}</td><td>{t.expand?.category?.name||'—'}</td><td><strong className={`priority-${t.priority}`}>{t.priority||'—'}</strong></td><td><span className={`status-badge status-${t.status}`}>{statusLabels[t.status]||t.status}</span></td><td><span className={`sla-badge sla-${sla.tone}`}>{sla.label}</span></td><td>{assigneeLabel(t)}</td><td>{formatDate(t.created)}</td>{maySupervise&&<td onClick={e=>e.stopPropagation()}><div style={{display:'grid',gap:6,minWidth:185}}><select value={t.assigned_to||''} disabled={assigning||!OPEN_STATUSES.has(t.status)} onChange={e=>quickAssign(t,e.target.value)}><option value="">Sin asignar</option>{workload.rows.map(m=><option key={m.id} value={m.id}>{m.name} ({m.total})</option>)}</select>{leastLoaded&&OPEN_STATUSES.has(t.status)&&t.assigned_to!==leastLoaded.id&&<button className="secondary" disabled={assigning} onClick={()=>quickAssign(t,leastLoaded.id)}>{assigning?'Asignando…':`Menor carga: ${leastLoaded.name}`}</button>}<button className="secondary" onClick={()=>navigate(`/tickets/${t.id}`,{state:{from:'/support'}})}>Abrir detalle</button></div></td>}</tr>;})}</tbody></table></div>}</section></main>;
 }
