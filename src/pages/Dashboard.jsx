@@ -189,6 +189,66 @@ export default function Dashboard() {
     };
   }, [filtered, reopenEvents]);
 
+  const agentPerformance = useMemo(() => {
+    if (!canManage) return [];
+    const openStatuses = new Set(['nuevo', 'en_proceso', 'esperando_usuario', 'esperando_tercero']);
+    const groups = new Map();
+
+    filtered.forEach((ticket) => {
+      if (!ticket.assigned_to) return;
+      const assignee = ticket.expand?.assigned_to;
+      const id = ticket.assigned_to;
+      if (!groups.has(id)) {
+        groups.set(id, {
+          id,
+          name: assignee?.name || assignee?.email || 'Responsable sin nombre',
+          role: assignee?.role || '',
+          tickets: [],
+        });
+      }
+      groups.get(id).tickets.push(ticket);
+    });
+
+    return [...groups.values()].map((group) => {
+      const assigned = group.tickets;
+      const resolved = assigned.filter((ticket) => ticket.status === 'resuelto' || ticket.status === 'cerrado');
+      const open = assigned.filter((ticket) => openStatuses.has(ticket.status));
+      const responseSamples = assigned.map((ticket) => hoursBetween(ticket.created, ticket.first_response_at)).filter((value) => value != null);
+      const resolutionSamples = resolved.map((ticket) => hoursBetween(ticket.created, ticket.resolved_at || ticket.closed_at)).filter((value) => value != null);
+      let evaluated = 0;
+      let compliant = 0;
+
+      assigned.forEach((ticket) => {
+        const sla = PRIORITY_HOURS[ticket.priority] || PRIORITY_HOURS.media;
+        const responseHours = hoursBetween(ticket.created, ticket.first_response_at);
+        const resolutionHours = hoursBetween(ticket.created, ticket.resolved_at || ticket.closed_at);
+        if (responseHours != null) {
+          evaluated += 1;
+          if (responseHours <= sla.response) compliant += 1;
+        }
+        if (resolutionHours != null && (ticket.status === 'resuelto' || ticket.status === 'cerrado')) {
+          evaluated += 1;
+          if (resolutionHours <= sla.resolution) compliant += 1;
+        }
+      });
+
+      const ticketIds = new Set(assigned.map((ticket) => ticket.id));
+      const reopens = reopenEvents.filter((event) => ticketIds.has(event.ticket)).length;
+      return {
+        id: group.id,
+        name: group.name,
+        role: group.role,
+        assigned: assigned.length,
+        resolved: resolved.length,
+        open: open.length,
+        avgResponse: responseSamples.length ? responseSamples.reduce((a, b) => a + b, 0) / responseSamples.length : null,
+        avgResolution: resolutionSamples.length ? resolutionSamples.reduce((a, b) => a + b, 0) / resolutionSamples.length : null,
+        compliance: evaluated ? (compliant / evaluated) * 100 : null,
+        reopens,
+      };
+    }).sort((a, b) => b.resolved - a.resolved || (b.compliance || 0) - (a.compliance || 0) || a.name.localeCompare(b.name));
+  }, [filtered, reopenEvents, canManage]);
+
   function ticketSla(ticket) {
     const sla = PRIORITY_HOURS[ticket.priority] || PRIORITY_HOURS.media;
     const created = dateMs(ticket.created);
@@ -268,6 +328,25 @@ export default function Dashboard() {
           <article className="card"><div className="dashboard-card-head"><div><p className="eyebrow">OPERACIÓN</p><h2>Tickets por departamento</h2></div></div><MetricBars data={metrics.departments} /></article>
           <article className="card"><div className="dashboard-card-head"><div><p className="eyebrow">IMPACTO</p><h2>Tickets por prioridad</h2></div></div><MetricBars data={metrics.priorities} /></article>
         </div>}
+
+        {canManage && <>
+          <h2 className="dashboard-section-title">Desempeño por responsable</h2>
+          <article className="card dashboard-table-wrap">
+            {agentPerformance.length ? <table className="dashboard-table">
+              <thead><tr><th>Responsable</th><th>Asignados</th><th>Resueltos</th><th>Abiertos</th><th>Cumplimiento SLA</th><th>1ª respuesta prom.</th><th>Resolución prom.</th><th>Reaperturas</th></tr></thead>
+              <tbody>{agentPerformance.map((agent) => <tr key={agent.id} onClick={() => navigate('/support')}>
+                <td><strong>{agent.name}</strong><span className="sub">{agent.role || 'soporte'}</span></td>
+                <td>{agent.assigned}</td>
+                <td><strong>{agent.resolved}</strong></td>
+                <td>{agent.open}</td>
+                <td><span className={`sla-mini ${agent.compliance == null ? 'ok' : agent.compliance >= 90 ? 'met' : agent.compliance >= 75 ? 'warning' : 'breached'}`}>{agent.compliance == null ? '—' : `${agent.compliance.toFixed(0)}%`}</span></td>
+                <td>{formatHours(agent.avgResponse)}</td>
+                <td>{formatHours(agent.avgResolution)}</td>
+                <td>{agent.reopens}</td>
+              </tr>)}</tbody>
+            </table> : <div className="metric-empty">No hay tickets asignados a responsables en este periodo.</div>}
+          </article>
+        </>}
 
         <h2 className="dashboard-section-title">Actividad reciente</h2>
         <article className="card dashboard-table-wrap">
