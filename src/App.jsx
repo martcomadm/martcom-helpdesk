@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { pb } from './lib/pocketbase';
 import Login from './pages/Login';
@@ -13,6 +14,37 @@ import NotificationBell from './components/NotificationBell';
 import ReopenHistoryPanel from './components/ReopenHistoryPanel';
 
 function ProtectedRoute({ children }) {
+  const [checkingAuth, setCheckingAuth] = useState(pb.authStore.isValid);
+  const [, setAuthVersion] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+
+    async function refreshAuth() {
+      if (!pb.authStore.isValid) {
+        if (active) setCheckingAuth(false);
+        return;
+      }
+
+      try {
+        await pb.collection('hd_users').authRefresh();
+        if (active) setAuthVersion((value) => value + 1);
+      } catch (err) {
+        console.warn('No fue posible refrescar la sesión:', err);
+        pb.authStore.clear();
+      } finally {
+        if (active) setCheckingAuth(false);
+      }
+    }
+
+    refreshAuth();
+    return () => { active = false; };
+  }, []);
+
+  if (checkingAuth) {
+    return <main className="app-shell"><section className="content"><article className="card"><p>Validando sesión…</p></article></section></main>;
+  }
+
   if (!pb.authStore.isValid) return <Navigate to="/login" replace />;
   return <><NotificationBell />{children}</>;
 }
