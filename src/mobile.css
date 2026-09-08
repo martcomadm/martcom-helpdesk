@@ -1,6 +1,20 @@
 /* MARTCOM Helpdesk — responsive layer
    Loaded after the existing styles so desktop remains unchanged. */
 
+/* Desktop/tablet navigation stays visible while long tables scroll. */
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  overflow-y: auto;
+  justify-content: flex-start;
+  background: #0b1020;
+}
+
+.sidebar > nav { margin-top: 32px; }
+.sidebar > button { margin-top: auto; }
+
 @media (max-width: 800px) {
   html, body, #root { width: 100%; max-width: 100%; overflow-x: hidden; }
 
@@ -19,7 +33,9 @@
     top: 0;
     z-index: 900;
     width: 100%;
+    height: auto;
     min-height: auto;
+    overflow: visible;
     padding: 10px 12px;
     border-right: 0;
     border-bottom: 1px solid #202c42;
@@ -27,6 +43,7 @@
     backdrop-filter: blur(12px);
     flex-direction: row;
     align-items: center;
+    justify-content: flex-start;
     gap: 10px;
   }
 
@@ -66,6 +83,7 @@
     flex: 0 0 auto;
     width: 42px;
     height: 42px;
+    margin-top: 0;
     padding: 0;
     overflow: hidden;
     color: transparent;
