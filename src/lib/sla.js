@@ -5,6 +5,27 @@ export const SLA_POLICY = {
   baja: { firstResponseHours: 8, resolutionHours: 48 },
 };
 
+export const CRM_NUMBER_SLA_POLICY = {
+  firstResponseHours: 10 / 60,
+  resolutionHours: 20 / 60,
+};
+
+function normalizeCategoryName(value = '') {
+  return String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function ticketCategoryName(ticket) {
+  return ticket?.expand?.category?.name || ticket?.category_name || '';
+}
+
+function isCrmNumberTicket(ticket) {
+  return normalizeCategoryName(ticketCategoryName(ticket)) === 'numero celular crm';
+}
+
 const CLOSED_STATUSES = ['resuelto', 'cerrado', 'cancelado'];
 
 function hoursToMs(hours) {
@@ -27,8 +48,18 @@ export function formatDuration(ms) {
   return `${sign}${minutes}m`;
 }
 
-export function getSlaPolicy(priority = 'media') {
-  return SLA_POLICY[priority] || SLA_POLICY.media;
+export function getSlaPolicy(priorityOrTicket = 'media') {
+  if (priorityOrTicket && typeof priorityOrTicket === 'object') {
+    if (isCrmNumberTicket(priorityOrTicket)) return CRM_NUMBER_SLA_POLICY;
+    return SLA_POLICY[priorityOrTicket.priority] || SLA_POLICY.media;
+  }
+  return SLA_POLICY[priorityOrTicket] || SLA_POLICY.media;
+}
+
+export function formatSlaTarget(hours) {
+  if (!Number.isFinite(hours)) return '—';
+  if (hours < 1) return `${Math.round(hours * 60)} min`;
+  return `${hours} h`;
 }
 
 function calculateTarget(created, targetHours, actualAt) {
@@ -58,7 +89,7 @@ function calculateTarget(created, targetHours, actualAt) {
 
 export function getTicketSla(ticket) {
   if (!ticket?.created) return null;
-  const policy = getSlaPolicy(ticket.priority);
+  const policy = getSlaPolicy(ticket);
   const response = calculateTarget(ticket.created, policy.firstResponseHours, ticket.first_response_at);
   const resolutionActual = ticket.resolved_at || ticket.closed_at || null;
   const resolution = calculateTarget(ticket.created, policy.resolutionHours, resolutionActual);
