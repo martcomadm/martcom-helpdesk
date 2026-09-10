@@ -13,7 +13,22 @@ const POLICY = {
   baja: { firstResponseHours: 8, resolutionHours: 48 },
 };
 const TERMINAL = new Set(['resuelto', 'cerrado', 'cancelado']);
+const CRM_NUMBER_POLICY = { firstResponseHours: 10 / 60, resolutionHours: 20 / 60 };
 let token = '';
+
+function normalizeCategoryName(value = '') {
+  return String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function policyFor(ticket) {
+  const categoryName = ticket?.expand?.category?.name || ticket?.category_name || '';
+  if (normalizeCategoryName(categoryName) === 'numero celular crm') return CRM_NUMBER_POLICY;
+  return POLICY[ticket.priority] || POLICY.media;
+}
 
 function requireConfig() {
   const missing = [];
@@ -151,11 +166,11 @@ async function processTarget(ticket, kind, state, flagWarning, flagBreached) {
 }
 
 async function processSla() {
-  const params = new URLSearchParams({ page: '1', perPage: '500', filter: 'status != "resuelto" && status != "cerrado" && status != "cancelado"', sort: 'created' });
+  const params = new URLSearchParams({ page: '1', perPage: '500', filter: 'status != "resuelto" && status != "cerrado" && status != "cancelado"', sort: 'created', expand: 'category' });
   const data = await pb(`/api/collections/hd_tickets/records?${params}`);
   for (const ticket of data.items) {
     if (TERMINAL.has(ticket.status)) continue;
-    const policy = POLICY[ticket.priority] || POLICY.media;
+    const policy = policyFor(ticket);
     const response = stateFor(ticket.created, policy.firstResponseHours, ticket.first_response_at);
     const resolution = stateFor(ticket.created, policy.resolutionHours, ticket.resolved_at || ticket.closed_at);
     await processTarget(ticket, 'response', response, 'sla_response_warning_sent', 'sla_response_breached_sent');
