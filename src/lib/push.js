@@ -2,10 +2,25 @@ import { currentUser, pb } from './pocketbase';
 
 // Notificaciones push del navegador / celular. Funcionan con la pestaña
 // cerrada: el service worker (public/sw.js) las recibe y las muestra.
-// El envío lo hace services/sla-watcher con las llaves VAPID.
+// El envío lo hace services/sla-watcher, que también crea las llaves VAPID y
+// guarda la pública en la colección hd_push_config.
 
-const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || '';
 const COLLECTION = 'hd_push_subscriptions';
+let vapidKeyPromise = null;
+
+async function getVapidPublicKey() {
+  const fromEnv = import.meta.env.VITE_VAPID_PUBLIC_KEY || '';
+  if (fromEnv) return fromEnv;
+  if (!vapidKeyPromise) {
+    vapidKeyPromise = pb.collection('hd_push_config')
+      .getList(1, 1, { sort: 'created' })
+      .then((res) => res.items[0]?.public_key || '')
+      .catch(() => '');
+  }
+  const key = await vapidKeyPromise;
+  if (!key) vapidKeyPromise = null; // reintenta la próxima vez
+  return key;
+}
 
 export function isIos() {
   if (typeof navigator === 'undefined') return false;
@@ -26,16 +41,16 @@ export function pushSupported() {
 }
 
 // Estados posibles:
-//  unconfigured  falta VITE_VAPID_PUBLIC_KEY en el build
+//  unconfigured  el servicio sla-watcher aún no ha preparado las llaves
 //  ios-install   iPhone/iPad: hay que agregar la app a la pantalla de inicio
 //  unsupported   el navegador no soporta push
 //  denied        la persona bloqueó las notificaciones del sitio
 //  enabled       este dispositivo ya está suscrito
 //  available     se puede activar
 export async function getPushState() {
-  if (!VAPID_PUBLIC_KEY) return 'unconfigured';
   if (isIos() && !isStandalone()) return 'ios-install';
   if (!pushSupported()) return 'unsupported';
+  if (!(await getVapidPublicKey())) return 'unconfigured';
   if (Notification.permission === 'denied') return 'denied';
   const registration = await navigator.serviceWorker.getRegistration('/');
   const subscription = await registration?.pushManager.getSubscription();
@@ -89,8 +104,9 @@ async function saveSubscription(subscription) {
 }
 
 export async function enablePush() {
-  if (!VAPID_PUBLIC_KEY) throw new Error('Falta configurar VITE_VAPID_PUBLIC_KEY.');
   if (!pushSupported()) throw new Error('Este navegador no soporta notificaciones push.');
+  const vapidPublicKey = await getVapidPublicKey();
+  if (!vapidPublicKey) throw new Error('Las notificaciones del dispositivo aún no están listas en el servidor.');
 
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') throw new Error('No se otorgó permiso para mostrar notificaciones.');
@@ -101,7 +117,7 @@ export async function enablePush() {
   if (!subscription) {
     subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
     });
   }
   await saveSubscription(subscription);
@@ -111,7 +127,7 @@ export async function enablePush() {
 // Al abrir la app con permiso ya concedido, refresca la suscripción guardada
 // (el navegador puede rotarla) sin volver a pedir permiso.
 export async function syncPushSubscription() {
-  if (!VAPID_PUBLIC_KEY || !pushSupported() || Notification.permission !== 'granted') return;
+  if (!pushSupported() || Notification.permission !== 'granted') return;
   const registration = await registerServiceWorker();
   const subscription = await registration?.pushManager.getSubscription();
   if (subscription) await saveSubscription(subscription).catch((err) => console.warn('No fue posible sincronizar push:', err));

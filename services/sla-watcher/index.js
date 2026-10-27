@@ -1,4 +1,5 @@
-import { createPushDispatcher, pushConfigured, PUSH_INTERVAL_MS } from './push.js';
+import { createPushDispatcher, PUSH_INTERVAL_MS } from './push.js';
+import { setupPush } from './push-setup.js';
 
 const PB_URL = (process.env.PB_URL || '').replace(/\/$/, '');
 const PB_EMAIL = process.env.PB_SUPERUSER_EMAIL || '';
@@ -252,11 +253,17 @@ console.log(`[AUTO-CLOSE] Tickets resueltos se cerrarán después de ${AUTO_CLOS
 await cycle();
 setInterval(cycle, INTERVAL_MS);
 
-if (pushConfigured()) {
-  const pushCycle = createPushDispatcher(pb);
-  console.log(`[PUSH] Envío de notificaciones push activo. Intervalo: ${PUSH_INTERVAL_MS / 1000}s`);
-  await pushCycle();
-  setInterval(pushCycle, PUSH_INTERVAL_MS);
-} else {
-  console.warn('[PUSH] Desactivado: faltan VAPID_PUBLIC_KEY y VAPID_PRIVATE_KEY.');
+async function startPush() {
+  try {
+    const keys = await setupPush(pb);
+    const pushCycle = createPushDispatcher(pb, keys);
+    console.log(`[PUSH] Envío de notificaciones push activo. Intervalo: ${PUSH_INTERVAL_MS / 1000}s`);
+    await pushCycle();
+    setInterval(pushCycle, PUSH_INTERVAL_MS);
+  } catch (err) {
+    // No detiene el watcher de SLA; reintenta la preparación en un minuto.
+    console.error('[PUSH] No fue posible preparar las notificaciones push:', err?.message || err);
+    setTimeout(startPush, 60000);
+  }
 }
+await startPush();

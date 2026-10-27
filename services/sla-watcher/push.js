@@ -3,8 +3,6 @@
 // Cola: notificaciones con push_sent_at vacío y creadas hace poco.
 import { PushError, sendPush } from './webpush.js';
 
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:soporte@martcom.mx';
 const MAX_AGE_MINUTES = Math.max(1, Number(process.env.PUSH_MAX_AGE_MINUTES || 30));
 const BATCH_SIZE = 100;
@@ -12,11 +10,6 @@ const URGENT_TYPES = new Set(['sla_breached', 'sla_warning']);
 
 export const PUSH_INTERVAL_MS = Math.max(2000, Number(process.env.PUSH_INTERVAL_MS || 5000));
 
-export function pushConfigured() {
-  return Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
-}
-
-const VAPID = { subject: VAPID_SUBJECT, publicKey: VAPID_PUBLIC_KEY, privateKey: VAPID_PRIVATE_KEY };
 
 // PocketBase guarda fechas como "2026-10-27 16:00:00.000Z".
 function pbDate(date) {
@@ -36,7 +29,9 @@ function payloadFor(notification) {
   });
 }
 
-export function createPushDispatcher(pb) {
+export function createPushDispatcher(pb, { publicKey, privateKey }) {
+  const VAPID = { subject: VAPID_SUBJECT, publicKey, privateKey };
+
   async function subscriptionsFor(userId) {
     const params = new URLSearchParams({ page: '1', perPage: '50', filter: `user = "${userId}"` });
     const data = await pb(`/api/collections/hd_push_subscriptions/records?${params}`);

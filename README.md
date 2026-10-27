@@ -54,28 +54,22 @@ La campana de notificaciones ahora:
 
 Al tocar un aviso se abre el ticket. Al cerrar sesión, ese dispositivo deja de recibir avisos de esa cuenta.
 
-### Configuración (una sola vez)
+### Configuración
 
-1. **Migración**: copia `pb_migrations/1793117721_push_notifications.js` a PocketBase y reinícialo. Crea la colección `hd_push_subscriptions` y agrega el campo `push_sent_at` a `hd_notifications`.
-2. **Llaves VAPID**:
-   ```bash
-   cd services/sla-watcher
-   npm run vapid
-   ```
-3. **Variables del servicio `sla-watcher`**:
-   ```env
-   VAPID_PUBLIC_KEY=...
-   VAPID_PRIVATE_KEY=...
-   VAPID_SUBJECT=mailto:soporte@tu-dominio.com
-   # opcionales
-   PUSH_INTERVAL_MS=5000        # cada cuánto revisa notificaciones nuevas
-   PUSH_MAX_AGE_MINUTES=30      # no envía push de notificaciones más viejas
-   ```
-   El watcher envía como push todo lo que se registra en `hd_notifications`, sea de la app o del propio watcher (SLA, recordatorios, cierres). No requiere `npm install`: el cifrado usa `node:crypto`.
-4. **Variable del frontend** (se lee al hacer build, así que hay que recompilar):
-   ```env
-   VITE_VAPID_PUBLIC_KEY=...   # la misma llave pública
-   ```
+**No hay que configurar nada.** Al arrancar, el servicio `sla-watcher`:
+- crea en PocketBase la colección `hd_push_subscriptions` (dispositivos de cada usuario), la colección `hd_push_config` y el campo `push_sent_at` en `hd_notifications`, si no existen;
+- genera las llaves VAPID la primera vez y las guarda en `hd_push_config`. La app lee de ahí la llave pública; la privada es un campo oculto que solo ve un superusuario;
+- envía como push cada registro nuevo de `hd_notifications`, sea de la app o del propio watcher (SLA, recordatorios, cierres).
+
+Solo hace falta que el watcher esté corriendo con sus variables de siempre (`PB_URL`, `PB_SUPERUSER_EMAIL`, `PB_SUPERUSER_PASSWORD`). No requiere `npm install`: el cifrado usa `node:crypto`.
+
+Variables opcionales del watcher:
+```env
+VAPID_SUBJECT=mailto:soporte@tu-dominio.com   # contacto que se manda a los servicios de push
+PUSH_INTERVAL_MS=5000                          # cada cuánto revisa notificaciones nuevas
+PUSH_MAX_AGE_MINUTES=30                        # no envía push de notificaciones más viejas
+VAPID_PUBLIC_KEY= / VAPID_PRIVATE_KEY=         # solo si quieres fijar tus propias llaves (npm run vapid)
+```
 
 ### Requisitos y limitaciones
 
