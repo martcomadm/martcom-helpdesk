@@ -103,6 +103,16 @@ async function saveSubscription(subscription) {
   }
 }
 
+function pushServiceHelp(err) {
+  if (err?.name !== 'AbortError') return err?.message || 'No fue posible activar las notificaciones.';
+  const ua = navigator.userAgent;
+  if (navigator.brave) {
+    return 'Brave tiene apagadas las notificaciones push. Ve a brave://settings/privacy, activa "Usar servicios de Google para mensajería push", reinicia Brave e inténtalo de nuevo.';
+  }
+  if (/OPR\//.test(ua)) return 'Opera no permite estas notificaciones. Usa Chrome o Edge.';
+  return 'El navegador no pudo conectarse a su servicio de notificaciones. Revisa que no estés en modo incógnito; si estás en la red de la oficina, puede que esté bloqueado el acceso a fcm.googleapis.com (Chrome) o a *.notify.windows.com (Edge). Prueba con datos del celular u otra red.';
+}
+
 export async function enablePush() {
   if (!pushSupported()) throw new Error('Este navegador no soporta notificaciones push.');
   const vapidPublicKey = await getVapidPublicKey();
@@ -115,10 +125,19 @@ export async function enablePush() {
   await navigator.serviceWorker.ready;
   let subscription = await registration.pushManager.getSubscription();
   if (!subscription) {
-    subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-    });
+    const options = { userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) };
+    try {
+      subscription = await registration.pushManager.subscribe(options);
+    } catch (err) {
+      // "Registration failed - push service error": a veces falla solo el primer intento.
+      if (err?.name !== 'AbortError') throw err;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      try {
+        subscription = await registration.pushManager.subscribe(options);
+      } catch (retryErr) {
+        throw new Error(pushServiceHelp(retryErr));
+      }
+    }
   }
   await saveSubscription(subscription);
   return subscription;
