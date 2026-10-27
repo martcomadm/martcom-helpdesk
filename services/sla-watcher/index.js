@@ -1,3 +1,5 @@
+import { createPushDispatcher, pushConfigured, PUSH_INTERVAL_MS } from './push.js';
+
 const PB_URL = (process.env.PB_URL || '').replace(/\/$/, '');
 const PB_EMAIL = process.env.PB_SUPERUSER_EMAIL || '';
 const PB_PASSWORD = process.env.PB_SUPERUSER_PASSWORD || '';
@@ -249,3 +251,12 @@ console.log(`[WAITING-USER] Recordatorio: ${WAITING_REMINDER_HOURS}h · Resoluci
 console.log(`[AUTO-CLOSE] Tickets resueltos se cerrarán después de ${AUTO_CLOSE_HOURS}h.`);
 await cycle();
 setInterval(cycle, INTERVAL_MS);
+
+if (pushConfigured()) {
+  const pushCycle = createPushDispatcher(pb);
+  console.log(`[PUSH] Envío de notificaciones push activo. Intervalo: ${PUSH_INTERVAL_MS / 1000}s`);
+  await pushCycle();
+  setInterval(pushCycle, PUSH_INTERVAL_MS);
+} else {
+  console.warn('[PUSH] Desactivado: faltan VAPID_PUBLIC_KEY y VAPID_PRIVATE_KEY.');
+}

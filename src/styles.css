@@ -74,3 +74,13 @@ label { display: block; font-size: 14px; }
 @media (max-width: 1250px) { .support-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }.support-toolbar input { grid-column: 1 / -1; } }
 @media (max-width: 1000px) { .detail-grid { grid-template-columns: 1fr; }.management-grid { grid-template-columns: 1fr; } }
 @media (max-width: 800px) { .app-shell { grid-template-columns: 1fr; }.sidebar { display: none; }.content { padding: 18px; }.stats-grid { grid-template-columns: repeat(2, 1fr); }.form-grid, .ticket-toolbar, .detail-info-grid, .support-toolbar { grid-template-columns: 1fr; }.support-toolbar input { grid-column: auto; }.form-wide { grid-column: auto; }.topbar, .management-head, .composer-bottom { align-items: stretch; flex-direction: column; }.topbar { padding-right: 52px; }.composer-actions { justify-content: space-between; }.ticket-row.clickable { padding-right: 20px; }.ticket-open-hint { position: static; display: block; margin-top: 14px; transform: none; }.notification-center { top: 14px; right: 14px; } }
+
+/* Ajustes de notificaciones: sonido y push del dispositivo */
+.notification-settings { display: grid; gap: 8px; padding: 12px 15px; background: #0f192d; border-bottom: 1px solid #1e2b43; }
+.notification-settings button { width: 100%; text-align: left; padding: 9px 11px; font-size: 12px; }
+.notification-toggle { background: #16213a; color: #8999b5; border: 1px solid #22304a; }
+.notification-toggle.on { color: #dce5f4; }
+.notification-push-enable { background: #e8edf6; color: #111827; }
+.notification-push-ok { color: #9fd3b0; font-size: 12px; font-weight: 700; }
+.notification-push-hint { color: #8999b5; font-size: 11px; line-height: 1.45; }
+.notification-push-hint.error-text { color: #f3a6a6; }

@@ -14,5 +14,12 @@ export function currentUser() {
 }
 
 export function logout() {
+  // Este dispositivo deja de recibir push de la cuenta que cierra sesión.
+  // Se toma el token antes de limpiar la sesión para poder borrar la suscripción.
+  const token = pb.authStore.token;
+  const userId = pb.authStore.record?.id;
+  import('./push')
+    .then(({ removePushSubscription }) => removePushSubscription({ token, userId }))
+    .catch((err) => console.warn('No fue posible quitar la suscripción push:', err));
   pb.authStore.clear();
 }

@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "vapid": "node vapid-keys.js"
   },
   "engines": {
     "node": ">=20.19.0"
